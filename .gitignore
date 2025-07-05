@@ -1,0 +1,10 @@
+cache
+libraries
+logs
+plugins
+target
+versions
+eula.txt
+server.jar
+server.properties
+.idea
