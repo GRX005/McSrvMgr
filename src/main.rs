@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use std::fs::File;
 use std::io::{stdin, Write};
 use std::process::Command;
 use std::time::Duration;
@@ -10,22 +11,22 @@ use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
-    println!("Minecraft Server Manager - V1.0");
-    if !fs::exists("server.jar").unwrap() {//Dl in not exists
+    if !fs::exists("server.jar").expect("Err checking server.jar exists") {//Dl in not exists
         let lTask =tokio::spawn(loading());
         tokio::spawn(dl()).await??;
         lTask.abort();
-        println!()
+        println!();
+        if !accept_eula() {
+            return Ok(())
+        }
     }
-
+    if !fs::exists("eula.txt").expect("Err checking eula.txt exists") {
+        if !accept_eula() {
+            return Ok(())
+        }
+    }
     start_srv();
 
-    let eulaP = Path::new("eula.txt");
-    let eulaC= fs::read_to_string(eulaP).expect("Err reading eula");
-    if eulaC.contains("eula=false") && !accept_eula(eulaP,eulaC.split("\n").collect()) {
-        return Ok(());
-    }
-    start_srv();
     Ok(())
 }
 
@@ -35,19 +36,15 @@ fn start_srv() {
     }
 }
 
-use std::path::Path;
-
-fn accept_eula(fPath:&Path, mut cont:Vec<&str>) ->bool {
-    print!("Do you agree to the eula? [Y/N]: ");
+fn accept_eula()->bool {
+    print!("Do you agree to the eula? (https://aka.ms/MinecraftEULA) [Y/N]: ");
     io::stdout().flush().expect("Err buffer flush");
     let mut resp = String::new();
     stdin().read_line(&mut resp).expect("Error while reading your response.");
     match resp.as_str().trim() {
         "Y" | "y" => {
-            if let Some(eula) = cont.last_mut() {
-                *eula = "eula=true";
-            }
-            fs::write(fPath, cont.join("\n")).expect("Err writing eula");
+            let mut file = File::create("eula.txt").expect("Err creating eula file");
+            file.write_all(b"eula=true").expect("Err writing eula");
             true
         },
         "N" | "n" => {
@@ -56,7 +53,7 @@ fn accept_eula(fPath:&Path, mut cont:Vec<&str>) ->bool {
         },
         _ => {
             println!("Incorrect answer.");
-            accept_eula(fPath,cont)
+            accept_eula()
         }
     }
 }
