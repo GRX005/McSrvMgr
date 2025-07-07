@@ -31,6 +31,7 @@ impl DlMgr {
         let rand = &jResp["downloads"]["server:default"];
         self.dlUrl=rand["url"].as_str().unwrap().to_string();
         self.sha=rand["checksums"]["sha256"].as_str().unwrap().to_string();
+        //self.sha=self.sha.replace("9","j");
         Ok(self)
     }
     pub async fn download(&self) -> Result<&Self, Box<dyn error::Error+Send+Sync>> {

@@ -5,7 +5,7 @@ mod dlMgr;
 use crate::dlMgr::DlMgr;
 use std::fs::File;
 use std::io::{stdin, Error, Write};
-use std::process::Command;
+use std::process::{exit, Command};
 use std::time::Duration;
 use std::{fs, io};
 use tokio::io::{stdout, AsyncWriteExt};
@@ -50,20 +50,24 @@ async fn start_dl() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
             break;
         }
     }
+
     lTask=tokio::spawn(loading());
     dl.download().await?;
     lTask.abort();
     stdout().write_all(b"\n").await?;
+
     lTask=tokio::spawn(hashLoading());
     let isCorrect = dl.verify().await?;
     lTask.abort();
     println!();
 
     if !isCorrect {
-        println!("Hash mismatch");
-        return Ok(())
+        fs::remove_file("server.jar")?;
+        println!("Download hash mismatch! Press enter to exit...");
+        stdin().read_line(&mut String::new())?;
+        exit(0)
     }
-    println!("Hash match");
+    println!("Download hash verified.");
     Ok(())
 }
 
