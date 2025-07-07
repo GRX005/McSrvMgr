@@ -1,27 +1,40 @@
 #![allow(non_snake_case)]
 
+mod dlMgr;
+
 use std::fs::File;
-use std::io::{stdin, Write};
+use std::io::{stdin, Error, Write};
 use std::process::Command;
 use std::time::Duration;
 use std::{fs, io};
-use tokio::fs::File as AsyncFile;
 use tokio::io::{stdout, AsyncWriteExt};
 use tokio::time::sleep;
+use crate::dlMgr::DlMgr;
 
 #[tokio::main]
 async fn main() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
-    if !fs::exists("server.jar").expect("Err checking server.jar exists") {//Dl in not exists
+    println!("Minecraft Server Manager - V1.0");
+    if !fs::exists("server.jar")? {//Srv not dl-ed yet.
+        print!("Version to download: ");
+        io::stdout().flush().unwrap();
+        let mut ver = String::new();
+        stdin().read_line(&mut ver)?;
         let lTask =tokio::spawn(loading());
-        tokio::spawn(dl()).await??;
+        let dl = DlMgr::init(ver);
+        if !dl.fetch().await?.download().await?.verify().await? {
+            println!("Hash mismatch");
+            return Ok(())
+        }
+        println!("Hash match");
+        
         lTask.abort();
         println!();
-        if !accept_eula() {
+        if !accept_eula()? {
             return Ok(())
         }
     }
-    if !fs::exists("eula.txt").expect("Err checking eula.txt exists") {
-        if !accept_eula() {
+    if !fs::exists("eula.txt")? {
+        if !accept_eula()? {
             return Ok(())
         }
     }
@@ -36,36 +49,26 @@ fn start_srv() {
     }
 }
 
-fn accept_eula()->bool {
+fn accept_eula()->Result<bool,Error> {
     print!("Do you agree to the eula? (https://aka.ms/MinecraftEULA) [Y/N]: ");
-    io::stdout().flush().expect("Err buffer flush");
+    io::stdout().flush()?;
     let mut resp = String::new();
-    stdin().read_line(&mut resp).expect("Error while reading your response.");
+    stdin().read_line(&mut resp)?;
     match resp.as_str().trim() {
         "Y" | "y" => {
-            let mut file = File::create("eula.txt").expect("Err creating eula file");
-            file.write_all(b"eula=true").expect("Err writing eula");
-            true
+            let mut file = File::create("eula.txt")?;
+            file.write_all(b"eula=true")?;
+            Ok(true)
         },
         "N" | "n" => {
             println!("You will need to agree to the eula to continue.");
-            false
+            Ok(false)
         },
         _ => {
             println!("Incorrect answer.");
             accept_eula()
         }
     }
-}
-
-async fn dl()-> Result<(), Box<dyn std::error::Error+Send+Sync>> {
-    let paper = "https://fill-data.papermc.io/v1/objects/5554d04f7b72cf9776843d7d600dfa72062ad4e9991dbcf6d7d47bdd58cead9f/paper-1.21.7-16.jar";
-    let mut dl_file = reqwest::get(paper).await?.error_for_status()?;
-    let mut disk = AsyncFile::create("server.jar").await?;
-    while let Some(elem)= dl_file.chunk().await? {
-        disk.write_all(&elem).await?;
-    }
-    Ok(())
 }
 
 async fn loading()-> io::Result<()> {
