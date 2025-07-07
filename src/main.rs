@@ -2,37 +2,26 @@
 
 mod dlMgr;
 
+use crate::dlMgr::DlMgr;
 use std::fs::File;
 use std::io::{stdin, Error, Write};
 use std::process::Command;
 use std::time::Duration;
 use std::{fs, io};
 use tokio::io::{stdout, AsyncWriteExt};
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
-use crate::dlMgr::DlMgr;
 
 #[tokio::main]
 async fn main() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
     println!("Minecraft Server Manager - V1.0");
     if !fs::exists("server.jar")? {//Srv not dl-ed yet.
-        print!("Version to download: ");
-        io::stdout().flush().unwrap();
-        let mut ver = String::new();
-        stdin().read_line(&mut ver)?;
-        let lTask =tokio::spawn(loading());
-        let dl = DlMgr::init(ver);
-        if !dl.fetch().await?.download().await?.verify().await? {
-            println!("Hash mismatch");
-            return Ok(())
-        }
-        println!("Hash match");
-        
-        lTask.abort();
-        println!();
+        start_dl().await?;
         if !accept_eula()? {
             return Ok(())
         }
     }
+
     if !fs::exists("eula.txt")? {
         if !accept_eula()? {
             return Ok(())
@@ -40,6 +29,41 @@ async fn main() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
     }
     start_srv();
 
+    Ok(())
+}
+
+async fn start_dl() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
+    let mut lTask:JoinHandle<Result<(),Error>>;
+    let mut dl:DlMgr;
+    //Req user input until it provides a good one.
+    loop {
+        print!("Version to download: ");
+        io::stdout().flush().unwrap();
+
+        let mut ver = String::new();
+        stdin().read_line(&mut ver)?;
+        stdout().write_all(b"Getting version information...\n").await?;
+        dl = DlMgr::init(ver);
+        if let Err(e)=dl.fetch().await {
+            println!("Error while requesting that version: {}",e);
+        } else {
+            break;
+        }
+    }
+    lTask=tokio::spawn(loading());
+    dl.download().await?;
+    lTask.abort();
+    stdout().write_all(b"\n").await?;
+    lTask=tokio::spawn(hashLoading());
+    let isCorrect = dl.verify().await?;
+    lTask.abort();
+    println!();
+
+    if !isCorrect {
+        println!("Hash mismatch");
+        return Ok(())
+    }
+    println!("Hash match");
     Ok(())
 }
 
@@ -70,10 +94,21 @@ fn accept_eula()->Result<bool,Error> {
         }
     }
 }
-
+//TODO File dl progress display
 async fn loading()-> io::Result<()> {
     let mut out = stdout();
     out.write_all(b"Downloading server").await?;
+    out.flush().await?;
+    loop {
+        out.write_all(b".").await?;
+        out.flush().await?;
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn hashLoading()-> io::Result<()> {
+    let mut out = stdout();
+    out.write_all(b"Verifying hash").await?;
     out.flush().await?;
     loop {
         out.write_all(b".").await?;
