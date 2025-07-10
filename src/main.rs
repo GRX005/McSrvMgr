@@ -15,11 +15,10 @@ use tokio::time::sleep;
 #[tokio::main]
 async fn main() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
     println!("Minecraft Server Manager - V1.0");
-    if !fs::exists("server.jar")? {//Srv not dl-ed yet.
+    let mut srv = getSrvName();
+    if srv.is_none() {
         start_dl().await?;
-        if !accept_eula()? {
-            return Ok(())
-        }
+        srv = getSrvName();
     }
 
     if !fs::exists("eula.txt")? {
@@ -27,9 +26,17 @@ async fn main() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
             return Ok(())
         }
     }
-    start_srv();
+    start_srv(srv.unwrap());
 
     Ok(())
+}
+
+fn getSrvName() ->Option<String> {
+
+    fs::read_dir(".").unwrap().find_map(|v| {
+        v.unwrap().file_name().to_str().filter(|s| s.starts_with("paper")).map(str::to_owned)
+    })
+
 }
 
 async fn start_dl() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
@@ -37,7 +44,7 @@ async fn start_dl() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
     let mut dl:DlMgr;
     //Req user input until it provides a good one.
     loop {
-        print!("Version to download: ");
+        print!("Version to download (latest): ");
         io::stdout().flush().unwrap();
 
         let mut ver = String::new();
@@ -71,8 +78,8 @@ async fn start_dl() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
     Ok(())
 }
 
-fn start_srv() {
-    if let Err(e) = Command::new("java").arg("-jar").arg("server.jar").arg("--nogui").status() {
+fn start_srv(name:String) {
+    if let Err(e) = Command::new("java").arg("-jar").arg(name).arg("--nogui").status() {
         println!("Failed to start the server: {}", e);
     }
 }
