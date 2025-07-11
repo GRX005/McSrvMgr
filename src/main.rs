@@ -7,20 +7,20 @@ use std::fs::File;
 use std::io::{stdin, Error, Write};
 use std::process::{exit, Command};
 use std::time::Duration;
-use std::{fs, io};
+use std::{error, fs, io};
 use tokio::io::{stdout, AsyncWriteExt};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 #[tokio::main]
-async fn main() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
+async fn main() -> Result<(),Box<dyn error::Error+Send+Sync>> {
     println!("Minecraft Server Manager - V1.0");
-    let mut srv = getSrvName();
+    let mut srv = checkLat().await;
     if srv.is_none() {
-        start_dl().await?;
-        srv = getSrvName();
+        start_dl(None).await?;
+        srv = checkLat().await;
     }
-
+    //checkLat(srv.as_ref().unwrap()).await;
     if !fs::exists("eula.txt")? {
         if !accept_eula()? {
             return Ok(())
@@ -31,24 +31,51 @@ async fn main() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
     Ok(())
 }
 
-fn getSrvName() ->Option<String> {
-    fs::read_dir(".").unwrap().find_map(|v| {
+fn getSrvName() -> Option<String> {
+    let name = fs::read_dir(".").unwrap().find_map(|v| {
         v.unwrap().file_name().to_str().filter(|s| s.starts_with("server")).filter(|s| s.ends_with(".jar")).map(str::to_owned)
-    })
+    });
+    name
 }
 
-async fn start_dl() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
+async fn checkLat() -> Option<String> {
+    let name = getSrvName();
+    if name.is_none() {
+        return None;
+    }
+
+    let mut nSplit = name.as_ref().unwrap().split("-");
+
+    let currV = nSplit.nth(1).unwrap().to_string();
+    let currB:u64= nSplit.nth(0).unwrap().split(".").nth(0).unwrap().parse().unwrap();
+
+    let remoteB = dlMgr::getLatBuild(&currV).await;
+
+    if currB==remoteB {
+        return name
+    }
+    fs::remove_file(name.unwrap()).unwrap();
+    start_dl(Some(currV)).await.unwrap();
+    Some(getSrvName().unwrap())
+
+}
+
+async fn start_dl(verOpt:Option<String>) -> Result<(),Box<dyn error::Error+Send+Sync>> {
     let mut lTask:JoinHandle<Result<(),Error>>;
     let mut dl:DlMgr;
     //Req user input until it provides a good one.
     loop {
-        print!("Version to download (latest): ");
-        io::stdout().flush().unwrap();
-
-        let mut ver = String::new();
-        stdin().read_line(&mut ver)?;
-        stdout().write_all(b"Getting version information...\n").await?;
-        dl = DlMgr::init(ver);
+        let mut toReqVer:String;
+        if let Some(ref ver)=verOpt {
+            toReqVer= ver.clone();
+        } else {
+            print!("Version to download (latest): ");
+            io::stdout().flush().unwrap();
+            toReqVer=String::new();
+            stdin().read_line(&mut toReqVer)?;
+            stdout().write_all(b"Getting version information...\n").await?;
+        }
+        dl = DlMgr::init(toReqVer);
         if let Err(e)=dl.fetch().await {
             println!("Error while requesting that version: {}",e);
         } else {
