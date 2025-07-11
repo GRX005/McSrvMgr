@@ -11,14 +11,14 @@ use tokio::task::{spawn_blocking, JoinHandle};
 pub struct DlMgr {
     dlUrl:String,
     sha:String,
-    fname:String,
+    vernum:u64,//Build
     ver:String
 }
 
 impl DlMgr {
 
     pub fn init(ver:String)-> DlMgr {
-        DlMgr {dlUrl:String::new(),sha:String::new(),fname:String::new(),ver}
+        DlMgr {dlUrl:String::new(),sha:String::new(), vernum:0,ver}
     }
 
     pub async fn fetch(&mut self)->Result<&Self, Box<dyn error::Error>> {
@@ -33,17 +33,17 @@ impl DlMgr {
         if let Some(err) = jResp["message"].as_str() {
             return Err(Box::new(Error::new(ErrorKind::Other, err)))
         }
+        self.vernum =jResp["id"].as_u64().unwrap();
         let rand = &jResp["downloads"]["server:default"];
         self.dlUrl=rand["url"].as_str().unwrap().to_string();
         self.sha=rand["checksums"]["sha256"].as_str().unwrap().to_string();
-        self.fname=rand["name"].as_str().unwrap().to_string();
         //self.sha=self.sha.replace("9","j");
         Ok(self)
     }
     pub async fn download(&self) -> Result<&Self, Box<dyn error::Error+Send+Sync>> {
         let paper = &self.dlUrl;
         let mut dl_file = reqwest::get(paper).await?.error_for_status()?;
-        let mut disk = AsyncFile::create(&self.fname).await?;
+        let mut disk = AsyncFile::create("server-".to_owned()+&self.vernum.to_string()+".jar").await?;
         while let Some(elem)= dl_file.chunk().await? {
             disk.write_all(&elem).await?;
         }
@@ -67,7 +67,7 @@ impl DlMgr {
         let hndl:JoinHandle<Result<bool,Error>> =spawn_blocking(move || {
             let mut hasher = Sha256::new();
             let mut buf = [0u8; 4096];
-            let mut srvFile = File::open(self.fname)?;
+            let mut srvFile = File::open("server-".to_owned()+ &self.vernum.to_string() +".jar")?;
             loop {
                 let br = srvFile.read(&mut buf)?;
                 if br<1 {

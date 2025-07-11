@@ -32,11 +32,9 @@ async fn main() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
 }
 
 fn getSrvName() ->Option<String> {
-
     fs::read_dir(".").unwrap().find_map(|v| {
-        v.unwrap().file_name().to_str().filter(|s| s.starts_with("paper")).map(str::to_owned)
+        v.unwrap().file_name().to_str().filter(|s| s.starts_with("server")).filter(|s| s.ends_with(".jar")).map(str::to_owned)
     })
-
 }
 
 async fn start_dl() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
@@ -77,31 +75,31 @@ async fn start_dl() -> Result<(),Box<dyn std::error::Error+Send+Sync>> {
     println!("Download hash verified.");
     Ok(())
 }
-
 fn start_srv(name:String) {
-    if let Err(e) = Command::new("java").arg("-jar").arg(name).arg("--nogui").status() {
+    if let Err(e) = Command::new("java").arg("-jar").arg(name).arg("nogui").status() {
         println!("Failed to start the server: {}", e);
     }
 }
-
+//Loop instead of recursion -> stackoverflow on too much bad values fixed.
 fn accept_eula()->Result<bool,Error> {
-    print!("Do you agree to the eula? (https://aka.ms/MinecraftEULA) [Y/N]: ");
-    io::stdout().flush()?;
-    let mut resp = String::new();
-    stdin().read_line(&mut resp)?;
-    match resp.as_str().trim() {
-        "Y" | "y" => {
-            let mut file = File::create("eula.txt")?;
-            file.write_all(b"eula=true")?;
-            Ok(true)
-        },
-        "N" | "n" => {
-            println!("You will need to agree to the eula to continue.");
-            Ok(false)
-        },
-        _ => {
-            println!("Incorrect answer.");
-            accept_eula()
+    loop {
+        print!("Do you agree to the eula? (https://aka.ms/MinecraftEULA) [Y/N] (Y): ");
+        io::stdout().flush()?;
+        let mut resp = String::new();
+        stdin().read_line(&mut resp)?;
+        match resp.as_str().trim() {
+            "Y" | "y" | "" => {
+                let mut file = File::create("eula.txt")?;
+                file.write_all(b"eula=true")?;
+                break Ok(true);
+            },
+            "N" | "n" => {
+                println!("You will need to agree to the eula to continue.");
+                break Ok(false)
+            },
+            _ => {
+                println!("Incorrect answer.");
+            }
         }
     }
 }
