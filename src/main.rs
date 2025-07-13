@@ -2,9 +2,10 @@
 
 mod dlMgr;
 
+use tokio::io::{stdin, AsyncBufReadExt, AsyncReadExt, BufReader};
 use crate::dlMgr::DlMgr;
 use std::fs::File;
-use std::io::{stdin, Error, Write};
+use std::io::{Error, Write};
 use std::process::{exit, Command};
 use std::time::Duration;
 use std::{error, fs, io};
@@ -14,7 +15,7 @@ use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<(),Box<dyn error::Error+Send+Sync>> {
-    println!("Minecraft Server Manager - V1.0");
+    stdout().write_all(b"Minecraft Server Manager - V1.0\n").await?;
     let mut srv = checkLat().await;
     if srv.is_none() {
         start_dl(None).await?;
@@ -32,10 +33,9 @@ async fn main() -> Result<(),Box<dyn error::Error+Send+Sync>> {
 }
 
 fn getSrvName() -> Option<String> {
-    let name = fs::read_dir(".").unwrap().find_map(|v| {
+    fs::read_dir(".").unwrap().find_map(|v| {
         v.unwrap().file_name().to_str().filter(|s| s.starts_with("server")).filter(|s| s.ends_with(".jar")).map(str::to_owned)
-    });
-    name
+    })
 }
 
 async fn checkLat() -> Option<String> {
@@ -43,6 +43,7 @@ async fn checkLat() -> Option<String> {
     if name.is_none() {
         return None;
     }
+    stdout().write_all(b"Checking for updates...\n").await.unwrap();
 
     let mut nSplit = name.as_ref().unwrap().split("-");
 
@@ -52,8 +53,10 @@ async fn checkLat() -> Option<String> {
     let remoteB = dlMgr::getLatBuild(&currV).await;
 
     if currB==remoteB {
+        //No upd found.
         return name
     }
+    stdout().write_all(b"Updates found, updating...\n").await.unwrap();
     fs::remove_file(name.unwrap()).unwrap();
     start_dl(Some(currV)).await.unwrap();
     Some(getSrvName().unwrap())
@@ -69,15 +72,17 @@ async fn start_dl(verOpt:Option<String>) -> Result<(),Box<dyn error::Error+Send+
         if let Some(ref ver)=verOpt {
             toReqVer= ver.clone();
         } else {
-            print!("Version to download (latest): ");
-            io::stdout().flush().unwrap();
+            let mut stdout = stdout();
+            let mut stdin = BufReader::new(stdin());
+            stdout.write_all(b"Version to download (latest): ").await?;
+            stdout.flush().await?;
             toReqVer=String::new();
-            stdin().read_line(&mut toReqVer)?;
-            stdout().write_all(b"Getting version information...\n").await?;
+            stdin.read_line(&mut toReqVer).await?;
+            stdout.write_all(b"Getting version information...\n").await?;
         }
         dl = DlMgr::init(toReqVer);
         if let Err(e)=dl.fetch().await {
-            println!("Error while requesting that version: {}",e);
+            stdout().write_all(format!("Error while requesting that version: {}\n",e).as_bytes()).await?;
         } else {
             break;
         }
@@ -91,20 +96,20 @@ async fn start_dl(verOpt:Option<String>) -> Result<(),Box<dyn error::Error+Send+
     lTask=tokio::spawn(hashLoading());
     let isCorrect = dl.verify().await?;
     lTask.abort();
-    println!();
+    stdout().write_all(b"\n").await.unwrap();
 
     if !isCorrect {
         fs::remove_file("server.jar")?;
-        println!("Download hash mismatch! Press enter to exit...");
-        stdin().read_line(&mut String::new())?;
+        stdout().write_all(b"Download hash mismatch! Press enter to exit...\n").await.unwrap();
+        stdin().read_to_string(&mut String::new()).await?;
         exit(0)
     }
-    println!("Download hash verified.");
+    stdout().write_all(b"Download hash verified.\n").await.unwrap();
     Ok(())
 }
 fn start_srv(name:String) {
     if let Err(e) = Command::new("java").arg("-jar").arg(name).arg("nogui").status() {
-        println!("Failed to start the server: {}", e);
+        eprintln!("Failed to start the server: {}", e);
     }
 }
 //Loop instead of recursion -> stackoverflow on too much bad values fixed.
@@ -113,7 +118,7 @@ fn accept_eula()->Result<bool,Error> {
         print!("Do you agree to the eula? (https://aka.ms/MinecraftEULA) [Y/N] (Y): ");
         io::stdout().flush()?;
         let mut resp = String::new();
-        stdin().read_line(&mut resp)?;
+        io::stdin().read_line(&mut resp)?;
         match resp.as_str().trim() {
             "Y" | "y" | "" => {
                 let mut file = File::create("eula.txt")?;
