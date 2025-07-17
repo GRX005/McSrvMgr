@@ -1,16 +1,16 @@
 #![allow(non_snake_case)]
 
 mod dlMgr;
+mod usrInp;
 
-use tokio::io::{stdin, AsyncBufReadExt, AsyncReadExt, BufReader};
 use crate::dlMgr::DlMgr;
-use std::fs::File;
-use std::io::{Error, Write};
+use std::io::Error;
 use std::process::{exit, Command};
 use std::time::Duration;
 use std::{error, fs, io};
+use tokio::io::{stdin, AsyncReadExt};
 use tokio::io::{stdout, AsyncWriteExt};
-use tokio::task::JoinHandle;
+use tokio::task::{spawn_blocking, JoinHandle};
 use tokio::time::sleep;
 
 #[tokio::main]
@@ -19,27 +19,31 @@ async fn main() -> Result<(),Box<dyn error::Error+Send+Sync>> {
     let mut srv = checkLat().await;
     if srv.is_none() {
         start_dl(None).await?;
-        srv = checkLat().await;
+        srv = getSrvName().await;
     }
-    //checkLat(srv.as_ref().unwrap()).await;
-    if !fs::exists("eula.txt")? {
-        if !accept_eula()? {
-            return Ok(())
+    spawn_blocking(|| -> Result<(), Error> {
+        if !fs::exists("eula.txt")? {
+            if !usrInp::accept_eula()? {
+                exit(0);
+            }
         }
-    }
+        Ok(())
+    }).await??;
     start_srv(srv.unwrap());
 
     Ok(())
 }
 
-fn getSrvName() -> Option<String> {
-    fs::read_dir(".").unwrap().find_map(|v| {
-        v.unwrap().file_name().to_str().filter(|s| s.starts_with("server")).filter(|s| s.ends_with(".jar")).map(str::to_owned)
-    })
+async fn getSrvName() -> Option<String> {
+    spawn_blocking(|| {
+        fs::read_dir(".").unwrap().find_map(|v| {
+            v.unwrap().file_name().to_str().filter(|s| s.starts_with("server")).filter(|s| s.ends_with(".jar")).map(str::to_owned)
+        })
+    }).await.unwrap()
 }
-
+//TODO dont check on first dl, handle ver as String
 async fn checkLat() -> Option<String> {
-    let name = getSrvName();
+    let name = getSrvName().await;
     if name.is_none() {
         return None;
     }
@@ -47,47 +51,41 @@ async fn checkLat() -> Option<String> {
 
     let mut nSplit = name.as_ref().unwrap().split("-");
 
-    let currV = nSplit.nth(1).unwrap().to_string();
+    let mut currV = nSplit.nth(1).unwrap().to_string();
     let currB:u64= nSplit.nth(0).unwrap().split(".").nth(0).unwrap().parse().unwrap();
 
-    let remoteB = dlMgr::getLatBuild(&currV).await;
+    let remoteB = dlMgr::getLatBuild(&mut currV,!name.as_ref()?.contains("V")).await;
 
     if currB==remoteB {
         //No upd found.
         return name
     }
-    stdout().write_all(b"Updates found, updating...\n").await.unwrap();
-    fs::remove_file(name.unwrap()).unwrap();
+    stdout().write_all(b"Server jar out of date!\n").await.unwrap();
+    tokio::fs::remove_file(name.unwrap()).await.unwrap();
     start_dl(Some(currV)).await.unwrap();
-    Some(getSrvName().unwrap())
+    Some(getSrvName().await.unwrap())
 
 }
 
-async fn start_dl(verOpt:Option<String>) -> Result<(),Box<dyn error::Error+Send+Sync>> {
-    let mut lTask:JoinHandle<Result<(),Error>>;
+async fn start_dl(mut verOpt:Option<String>) -> Result<(),Box<dyn error::Error+Send+Sync>> {
     let mut dl:DlMgr;
     //Req user input until it provides a good one.
+    let isPaper = spawn_blocking(||->bool {usrInp::getSrvType().unwrap()}).await?;
     loop {
-        let mut toReqVer:String;
-        if let Some(ref ver)=verOpt {
-            toReqVer= ver.clone();
+        let toReqVer:String;
+        if let Some(ver)=verOpt.take() {
+            toReqVer= ver;
         } else {
-            let mut stdout = stdout();
-            let mut stdin = BufReader::new(stdin());
-            stdout.write_all(b"Version to download (latest): ").await?;
-            stdout.flush().await?;
-            toReqVer=String::new();
-            stdin.read_line(&mut toReqVer).await?;
-            stdout.write_all(b"Getting version information...\n").await?;
+            toReqVer= usrInp::getVer().await?;
         }
-        dl = DlMgr::init(toReqVer);
+        dl = DlMgr::init(toReqVer, isPaper);
         if let Err(e)=dl.fetch().await {
             stdout().write_all(format!("Error while requesting that version: {}\n",e).as_bytes()).await?;
         } else {
             break;
         }
     }
-
+    let mut lTask:JoinHandle<Result<(),Error>>;
     lTask=tokio::spawn(loading());
     dl.download().await?;
     lTask.abort();
@@ -96,15 +94,15 @@ async fn start_dl(verOpt:Option<String>) -> Result<(),Box<dyn error::Error+Send+
     lTask=tokio::spawn(hashLoading());
     let isCorrect = dl.verify().await?;
     lTask.abort();
-    stdout().write_all(b"\n").await.unwrap();
+    stdout().write_all(b"\n").await?;
 
     if !isCorrect {
-        fs::remove_file("server.jar")?;
-        stdout().write_all(b"Download hash mismatch! Press enter to exit...\n").await.unwrap();
+        tokio::fs::remove_file("server.jar").await?;
+        stdout().write_all(b"Download hash mismatch! Press enter to exit...\n").await?;
         stdin().read_to_string(&mut String::new()).await?;
         exit(0)
     }
-    stdout().write_all(b"Download hash verified.\n").await.unwrap();
+    stdout().write_all(b"Download hash verified.\n").await?;
     Ok(())
 }
 fn start_srv(name:String) {
@@ -112,29 +110,7 @@ fn start_srv(name:String) {
         eprintln!("Failed to start the server: {}", e);
     }
 }
-//Loop instead of recursion -> stackoverflow on too much bad values fixed.
-fn accept_eula()->Result<bool,Error> {
-    loop {
-        print!("Do you agree to the eula? (https://aka.ms/MinecraftEULA) [Y/N] (Y): ");
-        io::stdout().flush()?;
-        let mut resp = String::new();
-        io::stdin().read_line(&mut resp)?;
-        match resp.as_str().trim() {
-            "Y" | "y" | "" => {
-                let mut file = File::create("eula.txt")?;
-                file.write_all(b"eula=true")?;
-                break Ok(true);
-            },
-            "N" | "n" => {
-                println!("You will need to agree to the eula to continue.");
-                break Ok(false)
-            },
-            _ => {
-                println!("Incorrect answer.");
-            }
-        }
-    }
-}
+
 //TODO File dl progress display
 async fn loading()-> io::Result<()> {
     let mut out = stdout();
