@@ -18,10 +18,11 @@ async fn main() -> Result<(),Box<dyn error::Error+Send+Sync>> {
     stdout().write_all(b"Minecraft Server Manager - V1.0\n").await?;
     let mut srv = checkLat().await;
     if srv.is_none() {
-        start_dl(None).await?;
+        let isPaper = spawn_blocking(||->bool {usrInp::getSrvType().unwrap()}).await?;
+        start_dl(None, isPaper).await?;
         srv = getSrvName().await;
     }
-    spawn_blocking(|| -> Result<(), Error> {
+    spawn_blocking(|| -> Result<(), Error> { //TODO NO eula for velocity
         if !fs::exists("eula.txt")? {
             if !usrInp::accept_eula()? {
                 exit(0);
@@ -53,8 +54,8 @@ async fn checkLat() -> Option<String> {
 
     let mut currV = nSplit.nth(1).unwrap().to_string();
     let currB:u64= nSplit.nth(0).unwrap().split(".").nth(0).unwrap().parse().unwrap();
-
-    let remoteB = dlMgr::getLatBuild(&mut currV,!name.as_ref()?.contains("V")).await;
+    let isPaper = !name.as_ref()?.contains("V");
+    let remoteB = dlMgr::getLatBuild(&mut currV,isPaper).await;
 
     if currB==remoteB {
         //No upd found.
@@ -62,15 +63,14 @@ async fn checkLat() -> Option<String> {
     }
     stdout().write_all(b"Server jar out of date!\n").await.unwrap();
     tokio::fs::remove_file(name.unwrap()).await.unwrap();
-    start_dl(Some(currV)).await.unwrap();
+    start_dl(Some(currV),isPaper).await.unwrap();
     Some(getSrvName().await.unwrap())
 
 }
 
-async fn start_dl(mut verOpt:Option<String>) -> Result<(),Box<dyn error::Error+Send+Sync>> {
+async fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn error::Error+Send+Sync>> {
     let mut dl:DlMgr;
     //Req user input until it provides a good one.
-    let isPaper = spawn_blocking(||->bool {usrInp::getSrvType().unwrap()}).await?;
     loop {
         let toReqVer:String;
         if let Some(ver)=verOpt.take() {

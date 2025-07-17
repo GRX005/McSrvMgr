@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io;
-use std::io::{read_to_string, stdin, Error, Write};
+use std::io::{stdin, Error, Write};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 //Loop instead of recursion -> stackoverflow on too much bad values fixed.
