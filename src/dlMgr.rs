@@ -1,8 +1,9 @@
+use reqwest::{tls, Client};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::error;
 use std::fs::File;
 use std::io::{Error, ErrorKind, Read};
-use std::error;
 use tokio::fs::File as AsyncFile;
 use tokio::io::AsyncWriteExt;
 use tokio::task::{spawn_blocking, JoinHandle};
@@ -13,13 +14,14 @@ pub struct DlMgr {
     sha:String,
     ver:String,
     build:u64,//Build
-    isPaper:bool
+    isPaper:bool,
+    client:Client
 }
 
 impl DlMgr {
 
     pub fn init(ver:String, isPaper:bool)-> DlMgr {
-        DlMgr {dlUrl:String::new(),sha:String::new(),ver:ver.trim().to_string(),build:0,isPaper}
+        DlMgr {dlUrl:String::new(),sha:String::new(),ver:ver.trim().to_string(),build:0,isPaper,client:getClient()}
     }
 
     pub async fn fetch(&mut self)->Result<&Self, Box<dyn error::Error>> {
@@ -27,7 +29,7 @@ impl DlMgr {
             self.ver=self.getLatest().await?;
             println!("The latest version: {}",self.ver);
         }
-        let resp = reqwest::get(format!("https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest", if self.isPaper {"paper"} else {"velocity"},self.ver)).await?;
+        let resp = self.client.get(format!("https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest", if self.isPaper {"paper"} else {"velocity"},self.ver)).send().await?;
         if self.ver.contains("-SNAPSHOT") {
             self.ver=self.ver.replace("-SNAPSHOT", "");
         }
@@ -44,7 +46,7 @@ impl DlMgr {
     }
     pub async fn download(&self) -> Result<&Self, Box<dyn error::Error+Send+Sync>> {
         let paper = &self.dlUrl;
-        let mut dl_file = reqwest::get(paper).await?.error_for_status()?;
+        let mut dl_file = self.client.get(paper).send().await?.error_for_status()?;
         let mut disk = AsyncFile::create(self.decType()).await?;
         while let Some(elem)= dl_file.chunk().await? {
             disk.write_all(&elem).await?;
@@ -53,7 +55,7 @@ impl DlMgr {
     }
 //An AI-gen func that gets latest ver automatically, should be the simplest+most optimal+supports 2.x+ ver scheme too.
     async fn getLatest(&self) -> Result<String, Box<dyn error::Error>> {
-        let json: Value = reqwest::get(format!("https://fill.papermc.io/v3/projects/{}",if self.isPaper {"paper"} else {"velocity"})).await?.json().await?;
+        let json: Value = self.client.get(format!("https://fill.papermc.io/v3/projects/{}",if self.isPaper {"paper"} else {"velocity"})).send().await?.json().await?;
 
         let ver = json["versions"].as_object().unwrap();
 
@@ -88,11 +90,15 @@ impl DlMgr {
     }
 }
 
+fn getClient()->Client {
+    reqwest::ClientBuilder::new().user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"), " (https://github.com/GRX005/McSrvMgr)")).min_tls_version(tls::Version::TLS_1_3).https_only(true).build().unwrap()
+}
+
 pub async fn getLatBuild(ver:&mut String, isPaper:bool) -> u64 {
     if !isPaper {
         ver.push_str("-SNAPSHOT")
     }
-    let ans:Value = reqwest::get(format!(
-        "https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest",if isPaper {"paper"} else {"velocity"},ver)).await.unwrap().json().await.unwrap();
+    let ans:Value = getClient().get(format!(
+        "https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest",if isPaper {"paper"} else {"velocity"},ver)).send().await.unwrap().json().await.unwrap();
     ans["id"].as_u64().unwrap()
 }
