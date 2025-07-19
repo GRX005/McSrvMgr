@@ -22,15 +22,16 @@ async fn main() -> Result<(),Box<dyn error::Error+Send+Sync>> {
         start_dl(None, isPaper).await?;
         srv = getSrvName().await;
     }
-    spawn_blocking(|| -> Result<(), Error> { //TODO NO eula for velocity
-        if !fs::exists("eula.txt")? {
+    let isV = srv.as_ref().unwrap().contains("V");
+    spawn_blocking(move || -> Result<(), Error> {
+        if !fs::exists("eula.txt")? && !isV {
             if !usrInp::accept_eula()? {
                 exit(0);
             }
         }
         Ok(())
     }).await??;
-    start_srv(srv.unwrap());
+    spawn_blocking(move || start_srv(srv.unwrap(),isV)).await?;
 
     Ok(())
 }
@@ -42,7 +43,6 @@ async fn getSrvName() -> Option<String> {
         })
     }).await.unwrap()
 }
-//TODO dont check on first dl, handle ver as String
 async fn checkLat() -> Option<String> {
     let name = getSrvName().await;
     if name.is_none() {
@@ -105,8 +105,15 @@ async fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn 
     stdout().write_all(b"Download hash verified.\n").await?;
     Ok(())
 }
-fn start_srv(name:String) {
-    if let Err(e) = Command::new("java").arg("-jar").arg(name).arg("nogui").status() {
+//Start with the recommended flags by paper.
+fn start_srv(name:String, isV:bool) {
+    let optArgs:std::str::Split<&str>;
+    if isV {//Velocity
+        optArgs="-XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+UnlockExperimentalVMOptions -XX:+ParallelRefProcEnabled -XX:+AlwaysPreTouch -XX:MaxInlineLevel=15 -jar".split(" ");
+    } else {//Paper
+        optArgs="-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -jar".split(" ");
+    }
+    if let Err(e) = Command::new("java").args(optArgs).arg(name).arg("nogui").status() {
         eprintln!("Failed to start the server: {}", e);
     }
 }
