@@ -1,4 +1,5 @@
-use reqwest::{tls, Client};
+use crate::DlMsg;
+use reqwest::{blocking, tls, ClientBuilder};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::error;
@@ -6,8 +7,8 @@ use std::fs::File;
 use std::io::{Error, ErrorKind, Read};
 use tokio::fs::File as AsyncFile;
 use tokio::io::AsyncWriteExt;
-use tokio::task::{spawn_blocking, JoinHandle};
-//TODO Warn if unsupported, maybe handle java?, start with recommended flags
+use tokio::sync::mpsc::Sender;
+//TODO Warn if unsupported, maybe handle java?
 
 pub struct DlMgr {
     dlUrl:String,
@@ -15,25 +16,41 @@ pub struct DlMgr {
     ver:String,
     build:u64,//Build
     isPaper:bool,
-    client:Client
+    client:blocking::Client
+}
+
+macro_rules! getClient {
+    ($builder:expr) => {
+        $builder
+            .user_agent(concat!(
+                env!("CARGO_PKG_NAME"), "/",
+                env!("CARGO_PKG_VERSION"),
+                " (https://github.com/GRX005/McSrvMgr)"
+            ))
+            .min_tls_version(tls::Version::TLS_1_3)
+            .https_only(true)
+            .tls_backend_rustls()
+            .build()
+            .unwrap()
+    };
 }
 
 impl DlMgr {
 
     pub fn init(ver:String, isPaper:bool)-> DlMgr {
-        DlMgr {dlUrl:String::new(),sha:String::new(),ver:ver.trim().to_string(),build:0,isPaper,client:getClient()}
+        DlMgr {dlUrl:String::new(),sha:String::new(),ver:ver.trim().to_string(),build:0,isPaper,client:getClient!(blocking::ClientBuilder::new())}
     }
 
-    pub async fn fetch(&mut self)->Result<&Self, Box<dyn error::Error>> {
+    pub fn fetch(&mut self)->Result<&Self, Box<dyn error::Error>> {
         if self.ver.trim().is_empty() {
-            self.ver=self.getLatest().await?;
+            self.ver=self.getLatest()?;
             println!("The latest version: {}",self.ver);
         }
-        let resp = self.client.get(format!("https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest", if self.isPaper {"paper"} else {"velocity"},self.ver)).send().await?;
+        let resp = self.client.get(format!("https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest", if self.isPaper {"paper"} else {"velocity"},self.ver)).send()?;
         if self.ver.contains("-SNAPSHOT") {
             self.ver=self.ver.replace("-SNAPSHOT", "");
         }
-        let jResp:Value = resp.json().await?;
+        let jResp:Value = resp.json()?;
         if let Some(err) = jResp["message"].as_str() {
             return Err(Box::new(Error::new(ErrorKind::Other, err)))
         }
@@ -44,18 +61,22 @@ impl DlMgr {
         //self.sha=self.sha.replace("9","j");
         Ok(self)
     }
-    pub async fn download(&self) -> Result<&Self, Box<dyn error::Error+Send+Sync>> {
-        let paper = &self.dlUrl;
-        let mut dl_file = self.client.get(paper).send().await?.error_for_status()?;
-        let mut disk = AsyncFile::create(self.decType()).await?;
+    pub async fn download(self, tx:Sender<DlMsg>) -> Result<Self, Box<dyn error::Error+Send+Sync>> {
+        let asyncClient = getClient!(ClientBuilder::new());
+        let mut dl_file = asyncClient.get(&self.dlUrl).send().await?.error_for_status()?;
+        let totalSize = dl_file.content_length().unwrap_or(0);
+        tx.send(DlMsg::StartWithSize(totalSize)).await?;
+        //let size = dl_file.content_length().unwrap();
+        let mut disk = AsyncFile::create(self.decName()).await?;
         while let Some(elem)= dl_file.chunk().await? {
             disk.write_all(&elem).await?;
+            tx.send(DlMsg::Chunk(elem.len() as u64)).await?
         }
         Ok(self)
     }
 //An AI-gen func that gets latest ver automatically, should be the simplest+most optimal+supports 2.x+ ver scheme too.
-    async fn getLatest(&self) -> Result<String, Box<dyn error::Error>> {
-        let json: Value = self.client.get(format!("https://fill.papermc.io/v3/projects/{}",if self.isPaper {"paper"} else {"velocity"})).send().await?.json().await?;
+    fn getLatest(&self) -> Result<String, Box<dyn error::Error>> {
+        let json: Value = self.client.get(format!("https://fill.papermc.io/v3/projects/{}",if self.isPaper {"paper"} else {"velocity"})).send()?.json()?;
 
         let ver = json["versions"].as_object().unwrap();
 
@@ -67,38 +88,31 @@ impl DlMgr {
         Ok(ver[latest].as_array().unwrap()[0].as_str().unwrap().to_string())
     }
 //Last-call, remove self.
-    pub async fn verify(self)->Result<bool,Error> {
-        let hndl:JoinHandle<Result<bool,Error>> =spawn_blocking(move || {
-            let mut hasher = Sha256::new();
-            let mut buf = [0u8; 4096];
-            let mut srvFile = File::open(self.decType())?;
-            loop {
-                let br = srvFile.read(&mut buf)?;
-                if br<1 {
-                    break;
-                }
-                hasher.update(&buf[..br]);
+    pub fn verify(self)->Result<bool,Error> {
+        let mut hasher = Sha256::new();
+        let mut buf = [0u8; 4096];
+        let mut srvFile = File::open(self.decName())?;
+        loop {
+            let br = srvFile.read(&mut buf)?;
+            if br<1 {
+                break;
             }
-            let res = hasher.finalize();
-            Ok(hex::encode(res)==self.sha)
-        });
-        hndl.await?
+            hasher.update(&buf[..br]);
+        }
+        let res = hasher.finalize();
+        Ok(hex::encode(res)==self.sha)
     }
 //Util
-    fn decType(&self)->String {
+    fn decName(&self)->String {
         "server".to_owned()+if self.isPaper {"-"} else {"V-"}+ &self.ver+"-"+&self.build.to_string()+".jar"
     }
 }
 
-fn getClient()->Client {
-    reqwest::ClientBuilder::new().user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"), " (https://github.com/GRX005/McSrvMgr)")).min_tls_version(tls::Version::TLS_1_3).https_only(true).build().unwrap()
-}
-
-pub async fn getLatBuild(ver:&mut String, isPaper:bool) -> u64 {
+pub fn getLatBuild(ver:&mut String, isPaper:bool) -> Result<u64,Box<dyn error::Error>> {
     if !isPaper {
         ver.push_str("-SNAPSHOT")
     }
-    let ans:Value = getClient().get(format!(
-        "https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest",if isPaper {"paper"} else {"velocity"},ver)).send().await.unwrap().json().await.unwrap();
-    ans["id"].as_u64().unwrap()
+    let ans:Value = getClient!(blocking::ClientBuilder::new()).get(format!(
+        "https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest",if isPaper {"paper"} else {"velocity"},ver)).send()?.json()?;
+    ans["id"].as_u64().ok_or("Failed to get latest build ID".into())
 }

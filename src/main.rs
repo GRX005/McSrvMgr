@@ -4,71 +4,67 @@ mod dlMgr;
 mod usrInp;
 
 use crate::dlMgr::DlMgr;
-use std::io::Error;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::io::stdin;
 use std::process::{exit, Command};
-use std::time::Duration;
-use std::{error, fs, io};
-use tokio::io::{stdin, AsyncReadExt};
-use tokio::io::{stdout, AsyncWriteExt};
-use tokio::task::{spawn_blocking, JoinHandle};
-use tokio::time::sleep;
+use std::{error, fs};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
 
-#[tokio::main]
-async fn main() -> Result<(),Box<dyn error::Error+Send+Sync>> {
-    stdout().write_all(b"Minecraft Server Manager - V1.0\n").await?;
-    let mut srv = checkLat().await;
+pub enum DlMsg {
+    StartWithSize(u64),
+    Chunk(u64)
+}
+
+fn main() -> Result<(),Box<dyn error::Error+Send+Sync>> {
+    println!("Minecraft Server Manager - V1.0");
+    let mut srv = checkLat();
     if srv.is_none() {
-        let isPaper = spawn_blocking(||->bool {usrInp::getSrvType().unwrap()}).await?;
-        start_dl(None, isPaper).await?;
-        srv = getSrvName().await;
+        let isPaper = usrInp::getSrvType()?;
+        start_dl(None, isPaper)?;
+        srv = getSrvName();
     }
     let isV = srv.as_ref().unwrap().contains("V");
-    spawn_blocking(move || -> Result<(), Error> {
-        if !fs::exists("eula.txt")? && !isV {
-            if !usrInp::accept_eula()? {
-                exit(0);
-            }
+    if !fs::exists("eula.txt")? && !isV {
+        if !usrInp::accept_eula()? {
+            fs::remove_file(getSrvName().unwrap())?;
+            exit(0);
         }
-        Ok(())
-    }).await??;
-    spawn_blocking(move || start_srv(srv.unwrap(),isV)).await?;
-
+    }
+    start_srv(srv.unwrap(),isV);
     Ok(())
 }
 
-async fn getSrvName() -> Option<String> {
-    spawn_blocking(|| {
-        fs::read_dir(".").unwrap().find_map(|v| {
-            v.unwrap().file_name().to_str().filter(|s| s.starts_with("server")).filter(|s| s.ends_with(".jar")).map(str::to_owned)
-        })
-    }).await.unwrap()
+fn getSrvName() -> Option<String> {
+    fs::read_dir(".").unwrap().find_map(|v| {
+        v.unwrap().file_name().to_str().filter(|s| s.starts_with("server")).filter(|s| s.ends_with(".jar")).map(str::to_owned)
+    })
 }
-async fn checkLat() -> Option<String> {
-    let name = getSrvName().await;
+fn checkLat() -> Option<String> {
+    let name = getSrvName();
     if name.is_none() {
         return None;
     }
-    stdout().write_all(b"Checking for updates...\n").await.unwrap();
+    println!("Checking for updates...");
 
     let mut nSplit = name.as_ref().unwrap().split("-");
 
     let mut currV = nSplit.nth(1).unwrap().to_string();
     let currB:u64= nSplit.nth(0).unwrap().split(".").nth(0).unwrap().parse().unwrap();
     let isPaper = !name.as_ref()?.contains("V");
-    let remoteB = dlMgr::getLatBuild(&mut currV,isPaper).await;
+    let remoteB = dlMgr::getLatBuild(&mut currV,isPaper).expect("Failed to get latest build!");
 
     if currB==remoteB {
         //No upd found.
         return name
     }
-    stdout().write_all(b"Server jar out of date!\n").await.unwrap();
-    tokio::fs::remove_file(name.unwrap()).await.unwrap();
-    start_dl(Some(currV),isPaper).await.unwrap();
-    Some(getSrvName().await.unwrap())
+    println!("Server jar out of date!");
+    fs::remove_file(name.unwrap()).unwrap();
+    start_dl(Some(currV),isPaper).unwrap();
+    Some(getSrvName().unwrap())
 
 }
-
-async fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn error::Error+Send+Sync>> {
+fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn error::Error+Send+Sync>> {
     let mut dl:DlMgr;
     //Req user input until it provides a good one.
     loop {
@@ -76,33 +72,35 @@ async fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn 
         if let Some(ver)=verOpt.take() {
             toReqVer= ver;
         } else {
-            toReqVer= usrInp::getVer().await?;
+            toReqVer= usrInp::getVer()?;
         }
         dl = DlMgr::init(toReqVer, isPaper);
-        if let Err(e)=dl.fetch().await {
-            stdout().write_all(format!("Error while requesting that version: {}\n",e).as_bytes()).await?;
+        if let Err(e)=dl.fetch() {
+            println!("{}", format!("Error while requesting that version: {}\n",e));
         } else {
             break;
         }
     }
-    let mut lTask:JoinHandle<Result<(),Error>>;
-    lTask=tokio::spawn(loading());
-    dl.download().await?;
-    lTask.abort();
-    stdout().write_all(b"\n").await?;
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    dl = rt.block_on(async {
+        let (tx, rx) = mpsc::channel(32);
+        let dl = tokio::spawn(dl.download(tx));
+        let prog = tokio::spawn(dlProgress(rx));
+        let (dlRes, _) = tokio::join!(dl,prog);
+        return dlRes?
+    })?;
 
-    lTask=tokio::spawn(hashLoading());
-    let isCorrect = dl.verify().await?;
-    lTask.abort();
-    stdout().write_all(b"\n").await?;
+    println!("Cheking server integrity...");
+    let isCorrect = dl.verify()?;
 
     if !isCorrect {
-        tokio::fs::remove_file("server.jar").await?;
-        stdout().write_all(b"Download hash mismatch! Press enter to exit...\n").await?;
-        stdin().read_to_string(&mut String::new()).await?;
-        exit(0)
+        fs::remove_file(getSrvName().unwrap())?;
+        println!("Server integrity FAIL! Press enter to try downloading again...");
+        stdin().read_line(&mut String::new())?;
+        exit(0);//TODO DO RETRY LOOP
     }
-    stdout().write_all(b"Download hash verified.\n").await?;
+//TODO Might bug into other texts??
+    println!("Server integrity PASS!");
     Ok(())
 }
 //Start with the recommended flags by paper.
@@ -118,25 +116,25 @@ fn start_srv(name:String, isV:bool) {
     }
 }
 
-//TODO File dl progress display
-async fn loading()-> io::Result<()> {
-    let mut out = stdout();
-    out.write_all(b"Downloading server").await?;
-    out.flush().await?;
-    loop {
-        out.write_all(b".").await?;
-        out.flush().await?;
-        sleep(Duration::from_millis(200)).await;
+async fn dlProgress(mut rx:Receiver<DlMsg>) {
+    let mut pb = ProgressBar::hidden();
+    // Loop ends automatically when the channel `tx` closes
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            DlMsg::StartWithSize(size) => {
+                pb = ProgressBar::new(size);
+                pb.set_style(
+                    ProgressStyle::with_template(
+                        "{msg} {percent:>3}% [{bar:50}] {bytes:>10}/{total_bytes:<10}"
+                    )
+                        .unwrap()
+                        .progress_chars("━╸ "),
+                );
+                pb.set_message("Downloading server...");
+            }
+            DlMsg::Chunk(size) => pb.inc(size),
+        }
     }
+    pb.finish_with_message("Done!");
 }
 
-async fn hashLoading()-> io::Result<()> {
-    let mut out = stdout();
-    out.write_all(b"Verifying hash").await?;
-    out.flush().await?;
-    loop {
-        out.write_all(b".").await?;
-        out.flush().await?;
-        sleep(Duration::from_millis(200)).await;
-    }
-}
