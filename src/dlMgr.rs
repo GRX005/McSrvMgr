@@ -19,7 +19,7 @@ pub struct DlMgr {
 impl DlMgr {
 
     pub fn init(ver:String, isPaper:bool)-> DlMgr {
-        DlMgr {dlUrl:String::new(),sha:String::new(),ver:ver.trim().to_string(),build:0,isPaper,client: getAgent()}
+        DlMgr {dlUrl:String::new(),sha:String::new(),ver,build:0,isPaper,client: getAgent()}
     }
 
     pub fn fetch(&mut self)->Result<&Self, Box<dyn error::Error>> {
@@ -54,9 +54,9 @@ impl DlMgr {
             )?.progress_chars("━╸ "),
         );
         pb.set_message("Downloading and verifying server...");
-
+//TODO Timeout?
         let mut disk = File::create(self.decName())?;
-        let mut buf = [0u8; 8192];
+        let mut buf = [0u8; 64 * 1024];
         let mut reader = dl_file.into_body().into_reader();
         loop {
             let n = reader.read(&mut buf)?;
@@ -67,6 +67,7 @@ impl DlMgr {
         }
 
         let res = hasher.finalize();
+        pb.finish();
         Ok(format!("{:x}", res)==self.sha)
     }
 //An AI-gen func that gets latest ver automatically, should be the simplest+most optimal+supports 2.x+ ver scheme too.

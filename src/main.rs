@@ -45,10 +45,10 @@ fn checkLat() -> Option<String> {
     println!("Checking for updates...");
 
     let mut nSplit = name.as_ref().unwrap().split("-");
-
+//TODO BETTER ERROR MGR
     let mut currV = nSplit.nth(1).unwrap().to_string();
     let currB:u64= nSplit.nth(0).unwrap().split(".").nth(0).unwrap().parse().unwrap();
-    let isPaper = !name.as_ref()?.contains("V");
+    let isPaper = !name.as_ref().unwrap().contains("V");
     let remoteB = dlMgr::getLatBuild(&mut currV,isPaper).expect("Failed to get latest build!");
 
     if currB==remoteB {
@@ -73,7 +73,7 @@ fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn error:
         }
         dl = DlMgr::init(toReqVer, isPaper);
         if let Err(e)=dl.fetch() {
-            println!("{}", format!("Error while requesting that version: {}\n",e));
+            println!("Error while requesting that version: {}",e);
         } else {
             break;
         }
@@ -86,7 +86,6 @@ fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn error:
         stdin().read_line(&mut String::new())?;
         exit(0);//TODO DO RETRY LOOP
     }
-//TODO Might bug into other texts??
     println!("Server integrity PASS!");
     Ok(())
 }
