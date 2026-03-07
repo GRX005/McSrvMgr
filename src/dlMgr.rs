@@ -1,13 +1,10 @@
-use crate::DlMsg;
-use reqwest::{blocking, tls, ClientBuilder};
+use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::error;
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read};
-use tokio::fs::File as AsyncFile;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc::Sender;
+use std::io::{Error, ErrorKind, Read, Write};
+use ureq::Agent;
 //TODO Warn if unsupported, maybe handle java?
 
 pub struct DlMgr {
@@ -16,29 +13,13 @@ pub struct DlMgr {
     ver:String,
     build:u64,//Build
     isPaper:bool,
-    client:blocking::Client
-}
-
-macro_rules! getClient {
-    ($builder:expr) => {
-        $builder
-            .user_agent(concat!(
-                env!("CARGO_PKG_NAME"), "/",
-                env!("CARGO_PKG_VERSION"),
-                " (https://github.com/GRX005/McSrvMgr)"
-            ))
-            .min_tls_version(tls::Version::TLS_1_3)
-            .https_only(true)
-            .tls_backend_rustls()
-            .build()
-            .unwrap()
-    };
+    client:Agent
 }
 
 impl DlMgr {
 
     pub fn init(ver:String, isPaper:bool)-> DlMgr {
-        DlMgr {dlUrl:String::new(),sha:String::new(),ver:ver.trim().to_string(),build:0,isPaper,client:getClient!(blocking::ClientBuilder::new())}
+        DlMgr {dlUrl:String::new(),sha:String::new(),ver:ver.trim().to_string(),build:0,isPaper,client: getAgent()}
     }
 
     pub fn fetch(&mut self)->Result<&Self, Box<dyn error::Error>> {
@@ -46,11 +27,11 @@ impl DlMgr {
             self.ver=self.getLatest()?;
             println!("The latest version: {}",self.ver);
         }
-        let resp = self.client.get(format!("https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest", if self.isPaper {"paper"} else {"velocity"},self.ver)).send()?;
+        let mut resp = self.client.get(format!("https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest", if self.isPaper {"paper"} else {"velocity"}, self.ver)).call()?;
         if self.ver.contains("-SNAPSHOT") {
             self.ver=self.ver.replace("-SNAPSHOT", "");
         }
-        let jResp:Value = resp.json()?;
+        let jResp:Value = resp.body_mut().read_json()?;
         if let Some(err) = jResp["message"].as_str() {
             return Err(Box::new(Error::new(ErrorKind::Other, err)))
         }
@@ -61,22 +42,36 @@ impl DlMgr {
         //self.sha=self.sha.replace("9","j");
         Ok(self)
     }
-    pub async fn download(self, tx:Sender<DlMsg>) -> Result<Self, Box<dyn error::Error+Send+Sync>> {
-        let asyncClient = getClient!(ClientBuilder::new());
-        let mut dl_file = asyncClient.get(&self.dlUrl).send().await?.error_for_status()?;
-        let totalSize = dl_file.content_length().unwrap_or(0);
-        tx.send(DlMsg::StartWithSize(totalSize)).await?;
-        //let size = dl_file.content_length().unwrap();
-        let mut disk = AsyncFile::create(self.decName()).await?;
-        while let Some(elem)= dl_file.chunk().await? {
-            disk.write_all(&elem).await?;
-            tx.send(DlMsg::Chunk(elem.len() as u64)).await?
+    pub fn download(self) -> Result<bool, Box<dyn error::Error+Send+Sync>> {
+        let dl_file = self.client.get(&self.dlUrl).call()?;
+        let size = dl_file.body().content_length().unwrap_or(0);
+        let mut hasher = Sha256::new();
+
+        let pb = ProgressBar::new(size);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{msg} {percent:>3}% [{bar:50}] {bytes:>10}/{total_bytes:<10}"
+            )?.progress_chars("━╸ "),
+        );
+        pb.set_message("Downloading and verifying server...");
+
+        let mut disk = File::create(self.decName())?;
+        let mut buf = [0u8; 8192];
+        let mut reader = dl_file.into_body().into_reader();
+        loop {
+            let n = reader.read(&mut buf)?;
+            if n == 0 { break; }
+            disk.write_all(&buf[..n])?;
+            hasher.update(&buf[..n]);
+            pb.inc(n as u64);
         }
-        Ok(self)
+
+        let res = hasher.finalize();
+        Ok(format!("{:x}", res)==self.sha)
     }
 //An AI-gen func that gets latest ver automatically, should be the simplest+most optimal+supports 2.x+ ver scheme too.
     fn getLatest(&self) -> Result<String, Box<dyn error::Error>> {
-        let json: Value = self.client.get(format!("https://fill.papermc.io/v3/projects/{}",if self.isPaper {"paper"} else {"velocity"})).send()?.json()?;
+        let json:Value = self.client.get(format!("https://fill.papermc.io/v3/projects/{}",if self.isPaper {"paper"} else {"velocity"})).call()?.body_mut().read_json()?;
 
         let ver = json["versions"].as_object().unwrap();
 
@@ -86,21 +81,6 @@ impl DlMgr {
         }).unwrap();
 
         Ok(ver[latest].as_array().unwrap()[0].as_str().unwrap().to_string())
-    }
-//Last-call, remove self.
-    pub fn verify(self)->Result<bool,Error> {
-        let mut hasher = Sha256::new();
-        let mut buf = [0u8; 4096];
-        let mut srvFile = File::open(self.decName())?;
-        loop {
-            let br = srvFile.read(&mut buf)?;
-            if br<1 {
-                break;
-            }
-            hasher.update(&buf[..br]);
-        }
-        let res = hasher.finalize();
-        Ok(hex::encode(res)==self.sha)
     }
 //Util
     fn decName(&self)->String {
@@ -112,7 +92,15 @@ pub fn getLatBuild(ver:&mut String, isPaper:bool) -> Result<u64,Box<dyn error::E
     if !isPaper {
         ver.push_str("-SNAPSHOT")
     }
-    let ans:Value = getClient!(blocking::ClientBuilder::new()).get(format!(
-        "https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest",if isPaper {"paper"} else {"velocity"},ver)).send()?.json()?;
+    let ans:Value = getAgent().get(format!(
+        "https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest",if isPaper {"paper"} else {"velocity"},ver)).call()?.body_mut().read_json()?;
     ans["id"].as_u64().ok_or("Failed to get latest build ID".into())
+}
+
+fn getAgent() -> Agent {
+    Agent::config_builder()
+        .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"), " (https://github.com/GRX005/McSrvMgr)"))
+        .https_only(true)
+        .build()
+        .new_agent()
 }

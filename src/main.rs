@@ -4,12 +4,9 @@ mod dlMgr;
 mod usrInp;
 
 use crate::dlMgr::DlMgr;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::io::stdin;
 use std::process::{exit, Command};
 use std::{error, fs};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::Receiver;
 
 pub enum DlMsg {
     StartWithSize(u64),
@@ -81,17 +78,7 @@ fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn error:
             break;
         }
     }
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    dl = rt.block_on(async {
-        let (tx, rx) = mpsc::channel(32);
-        let dl = tokio::spawn(dl.download(tx));
-        let prog = tokio::spawn(dlProgress(rx));
-        let (dlRes, _) = tokio::join!(dl,prog);
-        return dlRes?
-    })?;
-
-    println!("Cheking server integrity...");
-    let isCorrect = dl.verify()?;
+    let isCorrect = dl.download()?;
 
     if !isCorrect {
         fs::remove_file(getSrvName().unwrap())?;
@@ -114,27 +101,5 @@ fn start_srv(name:String, isV:bool) {
     if let Err(e) = Command::new("java").args(optArgs).arg(name).arg("nogui").status() {
         eprintln!("Failed to start the server: {}", e);
     }
-}
-
-async fn dlProgress(mut rx:Receiver<DlMsg>) {
-    let mut pb = ProgressBar::hidden();
-    // Loop ends automatically when the channel `tx` closes
-    while let Some(msg) = rx.recv().await {
-        match msg {
-            DlMsg::StartWithSize(size) => {
-                pb = ProgressBar::new(size);
-                pb.set_style(
-                    ProgressStyle::with_template(
-                        "{msg} {percent:>3}% [{bar:50}] {bytes:>10}/{total_bytes:<10}"
-                    )
-                        .unwrap()
-                        .progress_chars("━╸ "),
-                );
-                pb.set_message("Downloading server...");
-            }
-            DlMsg::Chunk(size) => pb.inc(size),
-        }
-    }
-    pb.finish_with_message("Done!");
 }
 
