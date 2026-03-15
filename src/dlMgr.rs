@@ -1,9 +1,9 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::error;
+use std::error::Error;
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use ureq::Agent;
 //TODO Warn if unsupported, maybe handle java?
 
@@ -19,21 +19,18 @@ pub struct DlMgr {
 impl DlMgr {
 
     pub fn init(ver:String, isPaper:bool)-> DlMgr {
-        DlMgr {dlUrl:String::new(),sha:String::new(),ver,build:0,isPaper,client: getAgent()}
+        DlMgr {dlUrl:String::new(),sha:String::new(),ver,build:0,isPaper,client:getAgent()}
     }
 
-    pub fn fetch(&mut self)->Result<&Self, Box<dyn error::Error>> {
+    pub fn fetch(&mut self)->Result<&Self, Box<dyn Error>> {
         if self.ver.trim().is_empty() {
             self.ver=self.getLatest()?;
             println!("The latest version: {}",self.ver);
         }
         let mut resp = self.client.get(format!("https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest", if self.isPaper {"paper"} else {"velocity"}, self.ver)).call()?;
-        if self.ver.contains("-SNAPSHOT") {
-            self.ver=self.ver.replace("-SNAPSHOT", "");
-        }
         let jResp:Value = resp.body_mut().read_json()?;
         if let Some(err) = jResp["message"].as_str() {
-            return Err(Box::new(Error::new(ErrorKind::Other, err)))
+            return Err(err.into());
         }
         self.build =jResp["id"].as_u64().unwrap();
         let rand = &jResp["downloads"]["server:default"];
@@ -41,8 +38,8 @@ impl DlMgr {
         self.sha=rand["checksums"]["sha256"].as_str().unwrap().to_string();
         //self.sha=self.sha.replace("9","j");
         Ok(self)
-    }
-    pub fn download(self) -> Result<bool, Box<dyn error::Error+Send+Sync>> {
+    }//TODO REUSE Agent after upd check?
+    pub fn download(self) -> Result<bool, Box<dyn Error>> {
         let dl_file = self.client.get(&self.dlUrl).call()?;
         let size = dl_file.body().content_length().unwrap_or(0);
         let mut hasher = Sha256::new();
@@ -71,7 +68,7 @@ impl DlMgr {
         Ok(format!("{:x}", res)==self.sha)
     }
 //An AI-gen func that gets latest ver automatically, should be the simplest+most optimal+supports 2.x+ ver scheme too.
-    fn getLatest(&self) -> Result<String, Box<dyn error::Error>> {
+    fn getLatest(&self) -> Result<String, ureq::Error> {
         let json:Value = self.client.get(format!("https://fill.papermc.io/v3/projects/{}",if self.isPaper {"paper"} else {"velocity"})).call()?.body_mut().read_json()?;
 
         let ver = json["versions"].as_object().unwrap();
@@ -85,14 +82,11 @@ impl DlMgr {
     }
 //Util
     fn decName(&self)->String {
-        "server".to_owned()+if self.isPaper {"-"} else {"V-"}+ &self.ver+"-"+&self.build.to_string()+".jar"
+        "server".to_owned()+if self.isPaper {"_"} else {"V_"}+ &self.ver+"_"+&self.build.to_string()+".jar"
     }
 }
 
-pub fn getLatBuild(ver:&mut String, isPaper:bool) -> Result<u64,Box<dyn error::Error>> {
-    if !isPaper {
-        ver.push_str("-SNAPSHOT")
-    }
+pub fn getLatBuild(ver:&mut String, isPaper:bool) -> Result<u64,Box<dyn Error>> {
     let ans:Value = getAgent().get(format!(
         "https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest",if isPaper {"paper"} else {"velocity"},ver)).call()?.body_mut().read_json()?;
     ans["id"].as_u64().ok_or("Failed to get latest build ID".into())
@@ -102,6 +96,7 @@ fn getAgent() -> Agent {
     Agent::config_builder()
         .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"), " (https://github.com/GRX005/McSrvMgr)"))
         .https_only(true)
+        .http_status_as_error(false)
         .build()
         .new_agent()
 }

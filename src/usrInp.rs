@@ -25,20 +25,14 @@ pub fn accept_eula()->Result<bool,Error> {
     }
 }
 
-pub fn getVer()->Result<String,Box<dyn std::error::Error+Send+Sync>> {
+pub fn getVer()->Result<String,Error> {
+    print!("Version to download (latest): ");
+    stdout().flush()?;
     let mut input = String::new();
-    loop {
-        print!("Version to download (latest): ");
-        stdout().flush()?;
-        stdin().read_line(&mut input)?;
-        input = input.trim().to_string();
-        if input.is_empty() || input.chars().all(|c| c.is_ascii_digit() || c == '.') {
-            println!("Getting version information...");
-            return Ok(input)
-        }
-        println!("Invalid version.");
-        input.clear();
-    }
+    stdin().read_line(&mut input)?;
+    input = input.trim().to_string();
+    println!("Getting version information...");
+    Ok(input)
 }
 //true = paper
 pub fn getSrvType()->Result<bool,Error> {

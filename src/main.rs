@@ -4,16 +4,12 @@ mod dlMgr;
 mod usrInp;
 
 use crate::dlMgr::DlMgr;
+use std::error::Error;
+use std::fs;
 use std::io::stdin;
 use std::process::{exit, Command};
-use std::{error, fs};
 
-pub enum DlMsg {
-    StartWithSize(u64),
-    Chunk(u64)
-}
-
-fn main() -> Result<(),Box<dyn error::Error+Send+Sync>> {
+fn main() -> Result<(),Box<dyn Error>> {
     println!("Minecraft Server Manager - V1.0");
     let mut srv = checkLat();
     if srv.is_none() {
@@ -43,13 +39,16 @@ fn checkLat() -> Option<String> {
         return None;
     }
     println!("Checking for updates...");
+    //TODO Better error management?
+    //name for ex.: server-1.21.11-127.jar
+    let mut nSplit = name.as_ref().unwrap().split('_');
+    let isPaper = !nSplit.next().unwrap().contains('V');
+    //Like 1.21.11
+    let mut currV = nSplit.next().unwrap().to_string();
+    //Like 127, from "127.jar"
+    let currB:u64= nSplit.next().unwrap().split('.').next().unwrap().parse().unwrap();
 
-    let mut nSplit = name.as_ref().unwrap().split("-");
-//TODO BETTER ERROR MGR
-    let mut currV = nSplit.nth(1).unwrap().to_string();
-    let currB:u64= nSplit.nth(0).unwrap().split(".").nth(0).unwrap().parse().unwrap();
-    let isPaper = !name.as_ref().unwrap().contains("V");
-    let remoteB = dlMgr::getLatBuild(&mut currV,isPaper).expect("Failed to get latest build!");
+    let remoteB = dlMgr::getLatBuild(&mut currV,isPaper).unwrap();
 
     if currB==remoteB {
         //No upd found.
@@ -61,7 +60,7 @@ fn checkLat() -> Option<String> {
     Some(getSrvName().unwrap())
 
 }
-fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn error::Error+Send+Sync>> {
+fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn Error>> {
     let mut dl:DlMgr;
     //Req user input until it provides a good one.
     loop {
