@@ -17,14 +17,13 @@ pub struct DlMgr {
 }
 
 impl DlMgr {
-
     pub fn init(ver:String, isPaper:bool)-> DlMgr {
         DlMgr {dlUrl:String::new(),sha:String::new(),ver,build:0,isPaper,client:getAgent()}
     }
 
     pub fn fetch(&mut self)->Result<&Self, Box<dyn Error>> {
-        if self.ver.trim().is_empty() {
-            self.ver=self.getLatest()?;
+        if self.ver.is_empty() {
+            self.ver=self.getLatVer()?;
             println!("The latest version: {}",self.ver);
         }
         let mut resp = self.client.get(format!("https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest", if self.isPaper {"paper"} else {"velocity"}, self.ver)).call()?;
@@ -32,14 +31,14 @@ impl DlMgr {
         if let Some(err) = jResp["message"].as_str() {
             return Err(err.into());
         }
-        self.build =jResp["id"].as_u64().unwrap();
-        let rand = &jResp["downloads"]["server:default"];
-        self.dlUrl=rand["url"].as_str().unwrap().to_string();
-        self.sha=rand["checksums"]["sha256"].as_str().unwrap().to_string();
-        //self.sha=self.sha.replace("9","j");
+        self.build = jResp["id"].as_u64().unwrap();
+        let latestVer = &jResp["downloads"]["server:default"];
+        self.dlUrl = latestVer["url"].as_str().unwrap().to_string();
+        self.sha = latestVer["checksums"]["sha256"].as_str().unwrap().to_string();
+        //self.sha=self.sha.replace("9","j"); //To test the hash verification
         Ok(self)
     }//TODO REUSE Agent after upd check?
-    pub fn download(self) -> Result<bool, Box<dyn Error>> {
+    pub fn downloadAndVerify(&self) -> Result<bool, Box<dyn Error>> {
         let dl_file = self.client.get(&self.dlUrl).call()?;
         let size = dl_file.body().content_length().unwrap_or(0);
         let mut hasher = Sha256::new();
@@ -67,22 +66,15 @@ impl DlMgr {
         pb.finish();
         Ok(format!("{:x}", res)==self.sha)
     }
-//An AI-gen func that gets latest ver automatically, should be the simplest+most optimal+supports 2.x+ ver scheme too.
-    fn getLatest(&self) -> Result<String, ureq::Error> {
-        let json:Value = self.client.get(format!("https://fill.papermc.io/v3/projects/{}",if self.isPaper {"paper"} else {"velocity"})).call()?.body_mut().read_json()?;
 
-        let ver = json["versions"].as_object().unwrap();
-
-        let latest = ver.keys().max_by_key(|k| {
-            let parts: Vec<u32> = k.split('.').map(|s| s.parse().unwrap()).collect();
-            (parts[0], parts[1])
-        }).unwrap();
-
-        Ok(ver[latest].as_array().unwrap()[0].as_str().unwrap().to_string())
+    fn getLatVer(&self) -> Result<String, ureq::Error> {
+        let json:Value = self.client.get(format!("https://fill.papermc.io/v3/projects/{}/versions",if self.isPaper {"paper"} else {"velocity"})).call()?.body_mut().read_json()?;
+        let ver = json["versions"][0]["version"]["id"].as_str().unwrap();//Get the first ver
+        Ok(ver.to_string())
     }
 //Util
     fn decName(&self)->String {
-        "server".to_owned()+if self.isPaper {"_"} else {"V_"}+ &self.ver+"_"+&self.build.to_string()+".jar"
+        format!("server{}{}_{}.jar", if self.isPaper { "_" } else { "V_" }, self.ver, self.build)
     }
 }
 

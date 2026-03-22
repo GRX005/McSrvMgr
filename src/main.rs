@@ -6,7 +6,7 @@ mod usrInp;
 use crate::dlMgr::DlMgr;
 use std::error::Error;
 use std::fs;
-use std::io::stdin;
+use std::io::{stdin, stdout, Write};
 use std::process::{exit, Command};
 
 fn main() -> Result<(),Box<dyn Error>> {
@@ -30,7 +30,7 @@ fn main() -> Result<(),Box<dyn Error>> {
 
 fn getSrvName() -> Option<String> {
     fs::read_dir(".").unwrap().find_map(|v| {
-        v.unwrap().file_name().to_str().filter(|s| s.starts_with("server")).filter(|s| s.ends_with(".jar")).map(str::to_owned)
+        v.unwrap().file_name().to_str().filter(|s| s.ends_with(".jar") && s.starts_with("server")).map(str::to_owned)
     })
 }
 fn checkLat() -> Option<String> {
@@ -77,13 +77,15 @@ fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn Error>
             break;
         }
     }
-    let isCorrect = dl.download()?;
-
-    if !isCorrect {
+    loop {
+        if dl.downloadAndVerify()? {
+            break
+        }
+        //If integrity verified, exit.
         fs::remove_file(getSrvName().unwrap())?;
-        println!("Server integrity FAIL! Press enter to try downloading again...");
+        print!("Server integrity FAIL!\nPress enter to try downloading it again...");
+        stdout().flush()?;
         stdin().read_line(&mut String::new())?;
-        exit(0);//TODO DO RETRY LOOP
     }
     println!("Server integrity PASS!");
     Ok(())
@@ -92,9 +94,9 @@ fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn Error>
 fn start_srv(name:String, isV:bool) {
     let optArgs:std::str::Split<&str>;
     if isV {//Velocity
-        optArgs="-XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+UnlockExperimentalVMOptions -XX:+ParallelRefProcEnabled -XX:+AlwaysPreTouch -XX:MaxInlineLevel=15 -jar".split(" ");
+        optArgs="-XX:+AlwaysPreTouch -XX:+ParallelRefProcEnabled -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:MaxInlineLevel=15 -jar".split(" ");
     } else {//Paper
-        optArgs="-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -jar".split(" ");
+        optArgs="-XX:+AlwaysPreTouch -XX:+DisableExplicitGC -XX:+ParallelRefProcEnabled -XX:+PerfDisableSharedMem -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1HeapRegionSize=8M -XX:G1HeapWastePercent=5 -XX:G1MaxNewSizePercent=40 -XX:G1MixedGCCountTarget=4 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1NewSizePercent=30 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:G1ReservePercent=20 -XX:InitiatingHeapOccupancyPercent=15 -XX:MaxGCPauseMillis=200 -XX:MaxTenuringThreshold=1 -XX:SurvivorRatio=32 -jar".split(" ");
     }
     if let Err(e) = Command::new("java").args(optArgs).arg(name).arg("nogui").status() {
         eprintln!("Failed to start the server: {}", e);
