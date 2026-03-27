@@ -1,10 +1,11 @@
 use std::fs::File;
 use std::io::{stdin, stdout, Error, Write};
+use console::style;
 
 //Loop instead of recursion -> stackoverflow on too much bad values fixed.
 pub fn accept_eula()->Result<bool,Error> {
     loop {
-        print!("Do you agree to the eula? (https://aka.ms/MinecraftEULA) [Y/N] (Y): ");
+        print!("Do you agree to the eula? ({}) [Y/N] (Y): ",style("https://aka.ms/MinecraftEULA").cyan());
         stdout().flush()?;
         let mut resp = String::new();
         stdin().read_line(&mut resp)?;

@@ -8,9 +8,11 @@ use std::error::Error;
 use std::fs;
 use std::io::{stdin, stdout, Write};
 use std::process::{exit, Command};
+use console::{style, Term};
 
 fn main() -> Result<(),Box<dyn Error>> {
     println!("Minecraft Server Manager - V1.0");
+    Term::stdout().set_title("Minecraft Server Manager");
     let mut srv = checkLat();
     if srv.is_none() {
         let isPaper = usrInp::getSrvType()?;
@@ -83,11 +85,12 @@ fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn Error>
         }
         //If integrity verified, exit.
         fs::remove_file(getSrvName().unwrap())?;
-        print!("Server integrity FAIL!\nPress enter to try downloading it again...");
+        println!("{}", style("Server integrity FAIL!").red());
+        print!("Press enter to try downloading it again...");
         stdout().flush()?;
         stdin().read_line(&mut String::new())?;
     }
-    println!("Server integrity PASS!");
+    println!("{}", style("Server integrity PASS!").green());
     Ok(())
 }
 //Start with the recommended flags by paper.
@@ -99,7 +102,7 @@ fn start_srv(name:String, isV:bool) {
         optArgs="-XX:+AlwaysPreTouch -XX:+DisableExplicitGC -XX:+ParallelRefProcEnabled -XX:+PerfDisableSharedMem -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1HeapRegionSize=8M -XX:G1HeapWastePercent=5 -XX:G1MaxNewSizePercent=40 -XX:G1MixedGCCountTarget=4 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1NewSizePercent=30 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:G1ReservePercent=20 -XX:InitiatingHeapOccupancyPercent=15 -XX:MaxGCPauseMillis=200 -XX:MaxTenuringThreshold=1 -XX:SurvivorRatio=32 -jar".split(" ");
     }
     if let Err(e) = Command::new("java").args(optArgs).arg(name).arg("nogui").status() {
-        eprintln!("Failed to start the server: {}", e);
+        eprintln!("{}", style(format!("Failed to start the server: {}", e)).red());
     }
 }
 

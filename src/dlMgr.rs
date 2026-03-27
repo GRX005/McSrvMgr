@@ -9,7 +9,7 @@ use ureq::Agent;
 
 pub struct DlMgr {
     dlUrl:String,
-    sha:String,
+    sha:[u8; 64],
     ver:String,
     build:u64,//Build
     isPaper:bool,
@@ -18,7 +18,7 @@ pub struct DlMgr {
 
 impl DlMgr {
     pub fn init(ver:String, isPaper:bool)-> DlMgr {
-        DlMgr {dlUrl:String::new(),sha:String::new(),ver,build:0,isPaper,client:getAgent()}
+        DlMgr {dlUrl:String::new(),sha:[0u8;64],ver,build:0,isPaper,client:getAgent()}
     }
 
     pub fn fetch(&mut self)->Result<&Self, Box<dyn Error>> {
@@ -34,8 +34,8 @@ impl DlMgr {
         self.build = jResp["id"].as_u64().unwrap();
         let latestVer = &jResp["downloads"]["server:default"];
         self.dlUrl = latestVer["url"].as_str().unwrap().to_string();
-        self.sha = latestVer["checksums"]["sha256"].as_str().unwrap().to_string();
-        //self.sha=self.sha.replace("9","j"); //To test the hash verification
+        self.sha = <[u8; 64]>::try_from(latestVer["checksums"]["sha256"].as_str().unwrap().as_bytes())?;
+        //self.sha[4] = b'c';  //To test the hash verification
         Ok(self)
     }//TODO REUSE Agent after upd check?
     pub fn downloadAndVerify(&self) -> Result<bool, Box<dyn Error>> {
@@ -63,8 +63,16 @@ impl DlMgr {
         }
 
         let res = hasher.finalize();
+//Decode the hex to a string so it can be compared
+        let mut hex_bytes = [0u8; 64];
+        let chars = b"0123456789abcdef";
+        for (i, &b) in res.iter().enumerate() {
+            hex_bytes[i * 2] = chars[(b >> 4) as usize];
+            hex_bytes[i * 2 + 1] = chars[(b & 0xf) as usize];
+        }
+
         pb.finish();
-        Ok(format!("{:x}", res)==self.sha)
+        Ok(hex_bytes==self.sha)
     }
 
     fn getLatVer(&self) -> Result<String, ureq::Error> {
