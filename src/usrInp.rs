@@ -16,12 +16,10 @@ pub fn accept_eula()->Result<bool,Error> {
                 break Ok(true);
             },
             "N" | "n" => {
-                println!("You will need to agree to the eula to continue.");
+                println!("{}",style("You will need to agree to the eula to continue.").yellow());
                 break Ok(false)
             },
-            _ => {
-                println!("Incorrect answer.");
-            }
+            _ => println!("{}",style("Incorrect answer!").red())
         }
     }
 }
@@ -45,7 +43,7 @@ pub fn getSrvType()->Result<bool,Error> {
         match buf.as_str().trim() {
             "V" | "v" => break Ok(false),
             "P" | "p" => break Ok(true),
-            _ => println!("Incorrect answer.")
+            _ => println!("{}",style("Incorrect answer!").red())
         }
     }
 }

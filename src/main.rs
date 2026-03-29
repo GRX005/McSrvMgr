@@ -11,7 +11,7 @@ use std::process::{exit, Command};
 use console::{style, Term};
 
 fn main() -> Result<(),Box<dyn Error>> {
-    println!("Minecraft Server Manager - V1.0");
+    println!("Minecraft Server Manager - v{}",env!("CARGO_PKG_VERSION"));
     Term::stdout().set_title("Minecraft Server Manager");
     let mut srv = checkLat();
     if srv.is_none() {
@@ -56,7 +56,7 @@ fn checkLat() -> Option<String> {
         //No upd found.
         return name
     }
-    println!("Server jar out of date!");
+    println!("{}", style("Server jar out of date!").yellow());
     fs::remove_file(name.unwrap()).unwrap();
     start_dl(Some(currV),isPaper).unwrap();
     Some(getSrvName().unwrap())
@@ -74,7 +74,7 @@ fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn Error>
         }
         dl = DlMgr::init(toReqVer, isPaper);
         if let Err(e)=dl.fetch() {
-            println!("Error while requesting that version: {}",e);
+            eprintln!("{}",style(format!("Error while requesting that version: {}",e)).red());
         } else {
             break;
         }
@@ -85,12 +85,12 @@ fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn Error>
         }
         //If integrity verified, exit.
         fs::remove_file(getSrvName().unwrap())?;
-        println!("{}", style("Server integrity FAIL!").red());
+        println!("Server integrity {}!",style("FAIL").red());
         print!("Press enter to try downloading it again...");
         stdout().flush()?;
         stdin().read_line(&mut String::new())?;
     }
-    println!("{}", style("Server integrity PASS!").green());
+    println!("Server integrity {}!",style("PASS").green());
     Ok(())
 }
 //Start with the recommended flags by paper.

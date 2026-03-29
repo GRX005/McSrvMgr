@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Write};
+use console::style;
 use ureq::Agent;
 //TODO Warn if unsupported, maybe handle java?
 
@@ -24,7 +25,7 @@ impl DlMgr {
     pub fn fetch(&mut self)->Result<&Self, Box<dyn Error>> {
         if self.ver.is_empty() {
             self.ver=self.getLatVer()?;
-            println!("The latest version: {}",self.ver);
+            println!("The latest version: {}",style(&self.ver).bold());
         }
         let mut resp = self.client.get(format!("https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest", if self.isPaper {"paper"} else {"velocity"}, self.ver)).call()?;
         let jResp:Value = resp.body_mut().read_json()?;
@@ -46,7 +47,7 @@ impl DlMgr {
         let pb = ProgressBar::new(size);
         pb.set_style(
             ProgressStyle::with_template(
-                "{msg} {percent:>3}% [{bar:50}] {bytes:>10}/{total_bytes:<10}"
+                "{msg} {percent:>3}% [{bar:50.cyan/dim}] {bytes:>10}/{total_bytes:<10}"
             )?.progress_chars("━╸ "),
         );
         pb.set_message("Downloading and verifying server...");
@@ -89,7 +90,7 @@ impl DlMgr {
 pub fn getLatBuild(ver:&mut String, isPaper:bool) -> Result<u64,Box<dyn Error>> {
     let ans:Value = getAgent().get(format!(
         "https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest",if isPaper {"paper"} else {"velocity"},ver)).call()?.body_mut().read_json()?;
-    ans["id"].as_u64().ok_or("Failed to get latest build ID".into())
+    Ok(ans["id"].as_u64().unwrap())
 }
 
 fn getAgent() -> Agent {
