@@ -5,7 +5,8 @@ use console::style;
 //Loop instead of recursion -> stackoverflow on too much bad values fixed.
 pub fn accept_eula()->Result<bool,Error> {
     loop {
-        print!("Do you agree to the eula? ({}) [Y/N] (Y): ",style("https://aka.ms/MinecraftEULA").cyan());
+        let Y = style("Y").bold();
+        print!("Do you agree to the eula? ({}) [{}/{}] ({}): ",style("https://aka.ms/MinecraftEULA").cyan(),Y,style("N").bold(),Y);
         stdout().flush()?;
         let mut resp = String::new();
         stdin().read_line(&mut resp)?;
@@ -25,7 +26,7 @@ pub fn accept_eula()->Result<bool,Error> {
 }
 
 pub fn getVer()->Result<String,Error> {
-    print!("Version to download (latest): ");
+    print!("Version to download ({}): ",style("latest").bold());
     stdout().flush()?;
     let mut input = String::new();
     stdin().read_line(&mut input)?;
@@ -36,7 +37,7 @@ pub fn getVer()->Result<String,Error> {
 //true = paper
 pub fn getSrvType()->Result<bool,Error> {
     loop {
-        print!("Velocity or Paper? [V/P]: ");
+        print!("Velocity or Paper? [{}/{}]: ",style("V").bold(),style("P").bold());
         stdout().flush()?;
         let mut buf = String::new();
         stdin().read_line(&mut buf)?;
