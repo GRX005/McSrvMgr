@@ -24,7 +24,7 @@ pub fn accept_eula()->Result<bool,Error> {
         }
     }
 }
-
+//TODO Only letters, -, and numbers should be sent.
 pub fn getVer()->Result<String,Error> {
     print!("Version to download ({}): ",style("latest").bold());
     stdout().flush()?;

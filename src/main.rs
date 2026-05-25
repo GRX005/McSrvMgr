@@ -9,14 +9,16 @@ use std::fs;
 use std::io::{stdin, stdout, Write};
 use std::process::{exit, Command};
 use console::{style, Term};
+use ureq::Agent;
 
 fn main() -> Result<(),Box<dyn Error>> {
     println!("Minecraft Server Manager - v{}",env!("CARGO_PKG_VERSION"));
     Term::stdout().set_title("Minecraft Server Manager");
-    let mut srv = checkLat();
+    let netAgent = getAgent();
+    let mut srv = checkLat(&netAgent);
     if srv.is_none() {
         let isPaper = usrInp::getSrvType()?;
-        start_dl(None, isPaper)?;
+        start_dl(None, isPaper, netAgent)?;
         srv = getSrvName();
     }
     let isV = srv.as_ref().unwrap().contains("V");
@@ -26,7 +28,7 @@ fn main() -> Result<(),Box<dyn Error>> {
             exit(0);
         }
     }
-    start_srv(srv.unwrap(),isV);
+    start_srv(srv.unwrap());
     Ok(())
 }
 
@@ -35,7 +37,7 @@ fn getSrvName() -> Option<String> {
         v.unwrap().file_name().to_str().filter(|s| s.ends_with(".jar") && s.starts_with("server")).map(str::to_owned)
     })
 }
-fn checkLat() -> Option<String> {
+fn checkLat(netAgent:&Agent) -> Option<String> {
     let name = getSrvName();
     if name.is_none() {
         return None;
@@ -50,7 +52,7 @@ fn checkLat() -> Option<String> {
     //Like 127, from "127.jar"
     let currB:u64= nSplit.next().unwrap().split('.').next().unwrap().parse().unwrap();
 
-    let remoteB = dlMgr::getLatBuild(&mut currV,isPaper).unwrap();
+    let remoteB = dlMgr::getLatBuild(&mut currV,isPaper,netAgent).unwrap();
 
     if currB==remoteB {
         //No upd found.
@@ -58,21 +60,21 @@ fn checkLat() -> Option<String> {
     }
     println!("{}", style("Server jar out of date!").yellow());
     fs::remove_file(name.unwrap()).unwrap();
-    start_dl(Some(currV),isPaper).unwrap();
+    start_dl(Some(currV),isPaper, netAgent.clone()).unwrap();
     Some(getSrvName().unwrap())
 
 }
-fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn Error>> {
+fn start_dl(mut verOpt:Option<String>, isPaper:bool, netAgent:Agent) -> Result<(),Box<dyn Error>> {
     let mut dl:DlMgr;
     //Req user input until it provides a good one.
     loop {
         let toReqVer:String;
         if let Some(ver)=verOpt.take() {
-            toReqVer= ver;
+            toReqVer = ver;
         } else {
-            toReqVer= usrInp::getVer()?;
+            toReqVer = usrInp::getVer()?;
         }
-        dl = DlMgr::init(toReqVer, isPaper);
+        dl = DlMgr::init(toReqVer, isPaper, netAgent.clone());
         if let Err(e)=dl.fetch() {
             eprintln!("{}",style(format!("Error while requesting that version: {}",e)).red());
         } else {
@@ -94,15 +96,18 @@ fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn Error>
     Ok(())
 }
 //Start with the recommended flags by paper.
-fn start_srv(name:String, isV:bool) {
-    let optArgs:std::str::Split<&str>;
-    if isV {//Velocity
-        optArgs="-XX:+AlwaysPreTouch -XX:+ParallelRefProcEnabled -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:MaxInlineLevel=15 -jar".split(" ");
-    } else {//Paper
-        optArgs="-XX:+AlwaysPreTouch -XX:+DisableExplicitGC -XX:+ParallelRefProcEnabled -XX:+PerfDisableSharedMem -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1HeapRegionSize=8M -XX:G1HeapWastePercent=5 -XX:G1MaxNewSizePercent=40 -XX:G1MixedGCCountTarget=4 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1NewSizePercent=30 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:G1ReservePercent=20 -XX:InitiatingHeapOccupancyPercent=15 -XX:MaxGCPauseMillis=200 -XX:MaxTenuringThreshold=1 -XX:SurvivorRatio=32 -jar".split(" ");
-    }
-    if let Err(e) = Command::new("java").args(optArgs).arg(name).arg("nogui").status() {
+fn start_srv(name:String) {
+    //Args disabled as there is no consistent info on what type should be used and when, specially on modern java.
+    if let Err(e) = Command::new("java").arg("-XX:+AlwaysPreTouch").arg("-jar").arg(name).arg("nogui").status() {
         eprintln!("{}", style(format!("Failed to start the server: {}", e)).red());
     }
 }
 
+fn getAgent() -> Agent {
+    Agent::config_builder()
+        .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"), " (https://github.com/GRX005/McSrvMgr)"))
+        .https_only(true)
+        .http_status_as_error(false)
+        .build()
+        .new_agent()
+}

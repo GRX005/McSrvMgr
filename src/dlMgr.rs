@@ -18,8 +18,8 @@ pub struct DlMgr {
 }
 
 impl DlMgr {
-    pub fn init(ver:String, isPaper:bool)-> DlMgr {
-        DlMgr {dlUrl:String::new(),sha:[0u8;64],ver,build:0,isPaper,client:getAgent()}
+    pub fn init(ver:String, isPaper:bool, netAgent:Agent)-> DlMgr {
+        DlMgr {dlUrl:String::new(),sha:[0u8;64],ver,build:0,isPaper,client:netAgent}
     }
 
     pub fn fetch(&mut self)->Result<&Self, Box<dyn Error>> {
@@ -87,17 +87,8 @@ impl DlMgr {
     }
 }
 
-pub fn getLatBuild(ver:&mut String, isPaper:bool) -> Result<u64,Box<dyn Error>> {
-    let ans:Value = getAgent().get(format!(
+pub fn getLatBuild(ver:&mut String, isPaper:bool, netAgent:&Agent) -> Result<u64,Box<dyn Error>> {
+    let ans:Value = netAgent.get(format!(
         "https://fill.papermc.io/v3/projects/{}/versions/{}/builds/latest",if isPaper {"paper"} else {"velocity"},ver)).call()?.body_mut().read_json()?;
     Ok(ans["id"].as_u64().unwrap())
-}
-
-fn getAgent() -> Agent {
-    Agent::config_builder()
-        .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"), " (https://github.com/GRX005/McSrvMgr)"))
-        .https_only(true)
-        .http_status_as_error(false)
-        .build()
-        .new_agent()
 }
