@@ -20,17 +20,23 @@ pub fn accept_eula()->Result<bool,Error> {
                 println!("{}",style("You will need to agree to the eula to continue.").yellow());
                 break Ok(false)
             },
-            _ => println!("{}",style("Incorrect answer!").red())
+            _ => println!("{}",style("Invalid answer!").red())
         }
     }
 }
-//TODO Only letters, -, and numbers should be sent.
 pub fn getVer()->Result<String,Error> {
-    print!("Version to download ({}): ",style("latest").bold());
-    stdout().flush()?;
-    let mut input = String::new();
-    stdin().read_line(&mut input)?;
-    input = input.trim().to_string();
+    let mut input;
+    loop {
+        print!("Version to download ({}): ",style("latest").bold());
+        stdout().flush()?;
+        input = String::new();
+        stdin().read_line(&mut input)?;
+        input = input.trim().to_string();
+        if !input.bytes().any(|b| !matches!(b, b'0'..=b'9' | b'.' | b'-' | b'a'..=b'z' | b'A'..=b'Z')) {
+            break
+        }
+        println!("{}",style("Invalid answer!").red())
+    }
     println!("Getting version information...");
     Ok(input)
 }
@@ -44,7 +50,7 @@ pub fn getSrvType()->Result<bool,Error> {
         match buf.as_str().trim() {
             "V" | "v" => break Ok(false),
             "P" | "p" => break Ok(true),
-            _ => println!("{}",style("Incorrect answer!").red())
+            _ => println!("{}",style("Invalid answer!").red())
         }
     }
 }
