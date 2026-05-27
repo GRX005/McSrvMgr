@@ -4,139 +4,110 @@ mod dlMgr;
 mod usrInp;
 
 use crate::dlMgr::DlMgr;
-use std::io::Error;
+use std::error::Error;
+use std::fs;
+use std::io::{stdin, stdout, Write};
 use std::process::{exit, Command};
-use std::time::Duration;
-use std::{error, fs, io};
-use tokio::io::{stdin, AsyncReadExt};
-use tokio::io::{stdout, AsyncWriteExt};
-use tokio::task::{spawn_blocking, JoinHandle};
-use tokio::time::sleep;
+use console::{style, Term};
+use ureq::Agent;
 
-#[tokio::main]
-async fn main() -> Result<(),Box<dyn error::Error+Send+Sync>> {
-    stdout().write_all(b"Minecraft Server Manager - V1.0\n").await?;
-    let mut srv = checkLat().await;
+fn main() -> Result<(),Box<dyn Error>> {
+    println!("Minecraft Server Manager - v{}",env!("CARGO_PKG_VERSION"));
+    Term::stdout().set_title("Minecraft Server Manager");
+    let netAgent = getAgent();
+    let mut srv = checkLat(&netAgent);
     if srv.is_none() {
-        let isPaper = spawn_blocking(||->bool {usrInp::getSrvType().unwrap()}).await?;
-        start_dl(None, isPaper).await?;
-        srv = getSrvName().await;
+        let isPaper = usrInp::getSrvType()?;
+        start_dl(None, isPaper, netAgent)?;
+        srv = getSrvName();
     }
     let isV = srv.as_ref().unwrap().contains("V");
-    spawn_blocking(move || -> Result<(), Error> {
-        if !fs::exists("eula.txt")? && !isV {
-            if !usrInp::accept_eula()? {
-                exit(0);
-            }
+    if !fs::exists("eula.txt")? && !isV {
+        if !usrInp::accept_eula()? {
+            fs::remove_file(getSrvName().unwrap())?;
+            exit(0);
         }
-        Ok(())
-    }).await??;
-    spawn_blocking(move || start_srv(srv.unwrap(),isV)).await?;
-
+    }
+    start_srv(srv.unwrap());
     Ok(())
 }
 
-async fn getSrvName() -> Option<String> {
-    spawn_blocking(|| {
-        fs::read_dir(".").unwrap().find_map(|v| {
-            v.unwrap().file_name().to_str().filter(|s| s.starts_with("server")).filter(|s| s.ends_with(".jar")).map(str::to_owned)
-        })
-    }).await.unwrap()
+fn getSrvName() -> Option<String> {
+    fs::read_dir(".").unwrap().find_map(|v| {
+        v.unwrap().file_name().to_str().filter(|s| s.ends_with(".jar") && s.starts_with("server")).map(str::to_owned)
+    })
 }
-async fn checkLat() -> Option<String> {
-    let name = getSrvName().await;
+fn checkLat(netAgent:&Agent) -> Option<String> {
+    let name = getSrvName();
     if name.is_none() {
         return None;
     }
-    stdout().write_all(b"Checking for updates...\n").await.unwrap();
+    println!("Checking for updates...");
+    //TODO Better error management?
+    //name for ex.: server-1.21.11-127.jar
+    let mut nSplit = name.as_ref().unwrap().split('_');
+    let isPaper = !nSplit.next().unwrap().contains('V');
+    //Like 1.21.11
+    let mut currV = nSplit.next().unwrap().to_string();
+    //Like 127, from "127.jar"
+    let currB:u64= nSplit.next().unwrap().split('.').next().unwrap().parse().unwrap();
 
-    let mut nSplit = name.as_ref().unwrap().split("-");
-
-    let mut currV = nSplit.nth(1).unwrap().to_string();
-    let currB:u64= nSplit.nth(0).unwrap().split(".").nth(0).unwrap().parse().unwrap();
-    let isPaper = !name.as_ref()?.contains("V");
-    let remoteB = dlMgr::getLatBuild(&mut currV,isPaper).await;
+    let remoteB = dlMgr::getLatBuild(&mut currV,isPaper,netAgent).unwrap();
 
     if currB==remoteB {
         //No upd found.
         return name
     }
-    stdout().write_all(b"Server jar out of date!\n").await.unwrap();
-    tokio::fs::remove_file(name.unwrap()).await.unwrap();
-    start_dl(Some(currV),isPaper).await.unwrap();
-    Some(getSrvName().await.unwrap())
+    println!("{}", style("Server jar out of date!").yellow());
+    fs::remove_file(name.unwrap()).unwrap();
+    start_dl(Some(currV),isPaper, netAgent.clone()).unwrap();
+    Some(getSrvName().unwrap())
 
 }
-
-async fn start_dl(mut verOpt:Option<String>, isPaper:bool) -> Result<(),Box<dyn error::Error+Send+Sync>> {
+fn start_dl(mut verOpt:Option<String>, isPaper:bool, netAgent:Agent) -> Result<(),Box<dyn Error>> {
     let mut dl:DlMgr;
     //Req user input until it provides a good one.
     loop {
         let toReqVer:String;
         if let Some(ver)=verOpt.take() {
-            toReqVer= ver;
+            toReqVer = ver;
         } else {
-            toReqVer= usrInp::getVer().await?;
+            toReqVer = usrInp::getVer()?;
         }
-        dl = DlMgr::init(toReqVer, isPaper);
-        if let Err(e)=dl.fetch().await {
-            stdout().write_all(format!("Error while requesting that version: {}\n",e).as_bytes()).await?;
+        dl = DlMgr::init(toReqVer, isPaper, netAgent.clone());
+        if let Err(e)=dl.fetch() {
+            eprintln!("{}",style(format!("Error while requesting that version: {}",e)).red());
         } else {
             break;
         }
     }
-    let mut lTask:JoinHandle<Result<(),Error>>;
-    lTask=tokio::spawn(loading());
-    dl.download().await?;
-    lTask.abort();
-    stdout().write_all(b"\n").await?;
-
-    lTask=tokio::spawn(hashLoading());
-    let isCorrect = dl.verify().await?;
-    lTask.abort();
-    stdout().write_all(b"\n").await?;
-
-    if !isCorrect {
-        tokio::fs::remove_file("server.jar").await?;
-        stdout().write_all(b"Download hash mismatch! Press enter to exit...\n").await?;
-        stdin().read_to_string(&mut String::new()).await?;
-        exit(0)
+    loop {
+        if dl.downloadAndVerify()? {
+            break
+        }
+        //If integrity verified, exit.
+        fs::remove_file(getSrvName().unwrap())?;
+        println!("Server integrity {}!",style("FAIL").red());
+        print!("Press enter to try downloading it again...");
+        stdout().flush()?;
+        stdin().read_line(&mut String::new())?;
     }
-    stdout().write_all(b"Download hash verified.\n").await?;
+    println!("Server integrity {}!",style("PASS").green());
     Ok(())
 }
 //Start with the recommended flags by paper.
-fn start_srv(name:String, isV:bool) {
-    let optArgs:std::str::Split<&str>;
-    if isV {//Velocity
-        optArgs="-XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+UnlockExperimentalVMOptions -XX:+ParallelRefProcEnabled -XX:+AlwaysPreTouch -XX:MaxInlineLevel=15 -jar".split(" ");
-    } else {//Paper
-        optArgs="-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -jar".split(" ");
-    }
-    if let Err(e) = Command::new("java").args(optArgs).arg(name).arg("nogui").status() {
-        eprintln!("Failed to start the server: {}", e);
+fn start_srv(name:String) {
+    //Args disabled as there is no consistent info on what type should be used and when, specially on modern java.
+    if let Err(e) = Command::new("java").arg("-XX:+AlwaysPreTouch").arg("-jar").arg(name).arg("nogui").status() {
+        eprintln!("{}", style(format!("Failed to start the server: {}", e)).red());
     }
 }
 
-//TODO File dl progress display
-async fn loading()-> io::Result<()> {
-    let mut out = stdout();
-    out.write_all(b"Downloading server").await?;
-    out.flush().await?;
-    loop {
-        out.write_all(b".").await?;
-        out.flush().await?;
-        sleep(Duration::from_millis(200)).await;
-    }
-}
-
-async fn hashLoading()-> io::Result<()> {
-    let mut out = stdout();
-    out.write_all(b"Verifying hash").await?;
-    out.flush().await?;
-    loop {
-        out.write_all(b".").await?;
-        out.flush().await?;
-        sleep(Duration::from_millis(200)).await;
-    }
+fn getAgent() -> Agent {
+    Agent::config_builder()
+        .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"), " (https://github.com/GRX005/McSrvMgr)"))
+        .https_only(true)
+        .http_status_as_error(false)
+        .build()
+        .new_agent()
 }
